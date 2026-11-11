@@ -1005,6 +1005,13 @@ def inspect_code(payload: InspectCodeRequest) -> dict[str, Any]:
     return result.to_dict()
 
 
+# The threat-filtering module is kept separate for reuse, while its router is
+# mounted here so the original backend entry point exposes both API surfaces.
+from threat_filter_core import threat_router  # noqa: E402
+
+app.include_router(threat_router)
+
+
 if __name__ == "__main__":
     import uvicorn
 
