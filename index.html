@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#080b10" />
+    <meta
+      name="description"
+      content="Veritas Inspector is an AI security command center for detecting deepfakes, malicious code, and social-engineering attacks."
+    />
+    <title>Veritas Inspector — AI Security Command Center</title>
+
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              ink: '#080b10',
+              panel: '#0d1219',
+              cyan: '#40e6ff',
+              violet: '#8b7bff',
+              lime: '#b7f34a'
+            },
+            fontFamily: {
+              sans: ['Inter', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+              display: ['Space Grotesk', 'Inter', 'ui-sans-serif', 'sans-serif']
+            }
+          }
+        }
+      };
+    </script>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link
+      rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css"
+      crossorigin="anonymous"
+      referrerpolicy="no-referrer"
+    />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="page-noise" aria-hidden="true"></div>
+    <div class="ambient ambient-one" aria-hidden="true"></div>
+    <div class="ambient ambient-two" aria-hidden="true"></div>
+
+    <header class="topbar" id="topbar">
+      <div class="shell nav-inner">
+        <a class="brand" href="#overview" aria-label="Veritas Inspector home">
+          <span class="brand-mark"><span></span><span></span><span></span></span>
+          <span class="brand-copy">
+            <strong>VERITAS<span>//</span>INSPECTOR</strong>
+            <small>AI security command center</small>
+          </span>
+        </a>
+
+        <div class="system-status" aria-label="System status">
+          <span class="status-pulse"></span>
+          <span>
+            <b>SYSTEM SECURE</b>
+            <small>SHIELD ACTIVE</small>
+          </span>
+          <span class="status-chevron"><i class="fa-solid fa-chevron-down"></i></span>
+        </div>
+
+        <nav class="desktop-nav" aria-label="Primary navigation">
+          <a class="nav-link active" href="#overview" data-nav-target="overview"><span>01</span>Overview</a>
+          <a class="nav-link" href="#scanner" data-nav-target="scanner"><span>02</span>Scanner</a>
+          <a class="nav-link" href="#dom-analysis" data-nav-target="dom-analysis"><span>03</span>DOM / Code Analysis</a>
+          <a class="nav-link" href="#device-guardian" data-nav-target="device-guardian"><span>04</span>Device Guardian</a>
+          <a class="nav-link" href="#settings" data-nav-target="settings"><span>05</span>Settings</a>
+        </nav>
+
+        <button class="mobile-menu-button" id="mobileMenuButton" type="button" aria-label="Open navigation" aria-expanded="false">
+          <i class="fa-solid fa-bars"></i>
+        </button>
+      </div>
+      <div class="mobile-nav" id="mobileNav" aria-hidden="true">
+        <a href="#overview" data-nav-target="overview">01 <span>Overview</span></a>
+        <a href="#scanner" data-nav-target="scanner">02 <span>Scanner</span></a>
+        <a href="#dom-analysis" data-nav-target="dom-analysis">03 <span>DOM / Code Analysis</span></a>
+        <a href="#device-guardian" data-nav-target="device-guardian">04 <span>Device Guardian</span></a>
+        <a href="#settings" data-nav-target="settings">05 <span>Settings</span></a>
+      </div>
+    </header>
+
+    <main>
+      <section class="hero shell" id="overview">
+        <div class="hero-copy">
+          <div class="eyebrow"><span class="eyebrow-line"></span>Autonomous truth layer <span class="eyebrow-dot"></span> v2.4.0</div>
+          <h1>Detect <em>AI-driven</em><br />manipulation <span class="hero-slash">/</span><br />instantly.</h1>
+          <p class="hero-lede">
+            One intelligence layer for deepfakes, malicious code, and social-engineering attacks. Veritas turns ambiguous signals into an evidence-backed verdict before they reach your team.
+          </p>
+          <div class="hero-actions">
+            <button class="button button-primary launch-button" type="button" data-scroll-to="scanner">
+              <span class="button-icon"><i class="fa-solid fa-crosshairs"></i></span>
+              Launch deep scan
+              <i class="fa-solid fa-arrow-up-right-from-square button-arrow"></i>
+            </button>
+            <button class="button button-ghost" type="button" data-scroll-to="results">
+              <i class="fa-regular fa-circle-play"></i>
+              View live report
+            </button>
+          </div>
+          <div class="hero-proof">
+            <div class="avatar-stack" aria-hidden="true">
+              <span class="avatar avatar-a">A</span><span class="avatar avatar-b">M</span><span class="avatar avatar-c">K</span><span class="avatar avatar-more">+8k</span>
+            </div>
+            <span><strong>8,241</strong> analysts protected this week</span>
+            <span class="proof-divider"></span>
+            <span class="proof-rating"><i class="fa-solid fa-star"></i> 4.9/5</span>
+          </div>
+        </div>
+
+        <div class="hero-visual" aria-label="Veritas threat intelligence visual">
+          <div class="visual-grid"></div>
+          <div class="orbit orbit-a"></div>
+          <div class="orbit orbit-b"></div>
+          <div class="scan-sweep"></div>
+          <div class="core-lockup">
+            <div class="core-shield"><i class="fa-solid fa-shield-halved"></i><span></span></div>
+            <div class="core-label">TRUTH<br /><b>ENGINE</b></div>
+          </div>
+          <div class="visual-chip chip-top"><i class="fa-solid fa-sparkles"></i><span><b>AI SIGNALS</b><small>2.8M evaluated</small></span></div>
+          <div class="visual-chip chip-right"><span class="mini-bars"><i></i><i></i><i></i><i></i><i></i></span><span><b>98.4%</b><small>confidence index</small></span></div>
+          <div class="visual-chip chip-bottom"><span class="chip-check"><i class="fa-solid fa-check"></i></span><span><b>NO ACTIVE THREATS</b><small>last sweep · 14 sec ago</small></span></div>
+          <div class="visual-radial-label label-left">01 <span>INGEST</span></div>
+          <div class="visual-radial-label label-bottom">03 <span>VERIFY</span></div>
+        </div>
+      </section>
+
+      <section class="telemetry-strip shell" aria-label="Network telemetry">
+        <div class="telemetry-item">
+          <span class="telemetry-icon cyan-icon"><i class="fa-solid fa-wave-square"></i></span>
+          <span><small>NETWORK PULSE</small><strong>12.8 <b>Gb/s</b></strong></span>
+          <span class="telemetry-trend up"><i class="fa-solid fa-arrow-trend-up"></i> 8.2%</span>
+        </div>
+        <div class="telemetry-item">
+          <span class="telemetry-icon violet-icon"><i class="fa-solid fa-fingerprint"></i></span>
+          <span><small>SIGNALS INDEXED</small><strong>2.84 <b>M</b></strong></span>
+          <span class="telemetry-trend">+1,428 today</span>
+        </div>
+        <div class="telemetry-item">
+          <span class="telemetry-icon lime-icon"><i class="fa-solid fa-bolt"></i></span>
+          <span><small>MEAN VERDICT TIME</small><strong>1.8 <b>sec</b></strong></span>
+          <span class="telemetry-trend up"><i class="fa-solid fa-arrow-trend-down"></i> 12.4%</span>
+        </div>
+        <div class="telemetry-item telemetry-location">
+          <span class="live-map-dot"></span>
+          <span><small>GLOBAL INTELLIGENCE MESH</small><strong>Operational</strong></span>
+          <span class="mesh-activity"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
+        </div>
+      </section>
+
+      <section class="workspace-section shell" id="scanner">
+        <div class="section-heading">
+          <div>
+            <div class="eyebrow"><span class="eyebrow-line"></span>Inspection workspace</div>
+            <h2>Find the signal<br /><span>inside the noise.</span></h2>
+          </div>
+          <div class="heading-context"><span class="context-dot"></span>All engines online <span class="context-divider"></span><i class="fa-regular fa-clock"></i> Updated 14 sec ago</div>
+        </div>
+
+        <div class="workspace-layout">
+          <div class="workspace-main">
+            <div class="glass-panel inspector-panel">
+              <div class="panel-topline">
+                <div>
+                  <div class="panel-kicker"><span class="live-dot"></span> LIVE INSPECTION</div>
+                  <h3>Choose an inspection mode</h3>
+                </div>
+                <div class="panel-meta"><span class="secure-lock"><i class="fa-solid fa-lock"></i></span> AES-256 encrypted</div>
+              </div>
+
+              <div class="mode-tabs" role="tablist" aria-label="Inspection modes">
+                <button class="mode-tab active" type="button" role="tab" aria-selected="true" data-mode="media" id="media-tab">
+                  <span class="tab-icon"><i class="fa-solid fa-photo-film"></i></span><span><b>Media forensics</b><small>Images &amp; video</small></span><i class="fa-solid fa-arrow-up-right tab-arrow"></i>
+                </button>
+                <button class="mode-tab" type="button" role="tab" aria-selected="false" data-mode="code" id="code-tab">
+                  <span class="tab-icon"><i class="fa-solid fa-code"></i></span><span><b>DOM / code analysis</b><small>Scripts &amp; source</small></span><i class="fa-solid fa-arrow-up-right tab-arrow"></i>
+                </button>
+                <button class="mode-tab" type="button" role="tab" aria-selected="false" data-mode="text" id="text-tab">
+                  <span class="tab-icon"><i class="fa-solid fa-message"></i></span><span><b>Text shield</b><small>Phishing &amp; authorship</small></span><i class="fa-solid fa-arrow-up-right tab-arrow"></i>
+                </button>
+              </div>
+
+              <div class="mode-panels">
+                <div class="mode-panel active" id="media-panel" data-panel="media" role="tabpanel" aria-labelledby="media-tab">
+                  <div class="drop-zone" id="dropZone" tabindex="0" role="button" aria-label="Upload media for analysis">
+                    <input id="fileInput" type="file" accept="image/*,video/*" hidden />
+                    <div class="drop-visual"><i class="fa-solid fa-cloud-arrow-up"></i><span></span></div>
+                    <div class="drop-copy"><strong>Drop media to begin analysis</strong><span>or <button class="inline-action" id="browseButton" type="button">browse your device</button></span></div>
+                    <div class="drop-formats"><span><i class="fa-regular fa-image"></i> JPG, PNG, WEBP</span><span><i class="fa-solid fa-film"></i> MP4, MOV</span><span><i class="fa-solid fa-weight-hanging"></i> Max 250 MB</span></div>
+                  </div>
+                  <div class="media-preview" id="mediaPreview" hidden>
+                    <div class="preview-thumb" id="previewThumb"></div>
+                    <div class="preview-copy"><span class="preview-label"><i class="fa-solid fa-circle-check"></i> Ready for inspection</span><strong id="previewName">evidence-file.png</strong><small id="previewMeta">Image · 2.4 MB</small></div>
+                    <button class="icon-button remove-file" id="removeFile" type="button" aria-label="Remove selected file"><i class="fa-solid fa-xmark"></i></button>
+                  </div>
+                  <div class="sample-row"><span>Try a signal preset</span><button type="button" class="sample-button" data-sample="media"><i class="fa-solid fa-wand-magic-sparkles"></i> Synthetic portrait</button><button type="button" class="sample-button" data-sample="media-video"><i class="fa-solid fa-wave-square"></i> Video frame</button></div>
+                </div>
+
+                <div class="mode-panel" id="dom-analysis" data-panel="code" role="tabpanel" aria-labelledby="code-tab" hidden>
+                  <div class="editor-shell">
+                    <div class="editor-header"><div class="editor-dots"><i></i><i></i><i></i></div><span id="editorFilename">source-inspection.js</span><span class="editor-language"><i class="fa-brands fa-js"></i> JavaScript</span></div>
+                    <textarea id="codeInput" spellcheck="false" placeholder="Paste HTML, JavaScript, a DOM snapshot, or a suspicious URL here...">const observer = new MutationObserver((records) =&gt; {
+  records.forEach(({ target }) =&gt; {
+    if (target.dataset.aiInjected === 'true') {
+      console.warn('Unexpected DOM mutation detected');
+    }
+  });
+});
+observer.observe(document.body, { subtree: true, attributes: true });</textarea>
+                    <div class="editor-footer"><span><i class="fa-solid fa-shield-halved"></i> Content stays in your browser</span><span id="codeCount">0 characters</span></div>
+                  </div>
+                  <div class="sample-row"><span>Load a preset</span><button type="button" class="sample-button" data-sample="code"><i class="fa-solid fa-shield-virus"></i> DOM mutation watch</button><button type="button" class="sample-button" data-sample="url"><i class="fa-solid fa-link"></i> Inspect URL</button></div>
+                </div>
+
+                <div class="mode-panel" id="text-panel" data-panel="text" role="tabpanel" aria-labelledby="text-tab" hidden>
+                  <div class="text-editor-shell">
+                    <div class="text-editor-toolbar"><span><i class="fa-solid fa-feather-pointed"></i> Evidence text</span><div><button class="toolbar-button" id="pasteButton" type="button"><i class="fa-regular fa-paste"></i> Paste</button><button class="toolbar-button" id="clearTextButton" type="button"><i class="fa-solid fa-eraser"></i> Clear</button></div></div>
+                    <textarea id="textInput" spellcheck="true" placeholder="Paste an email, article, DM, or support request to inspect authorship and intent...">Your account has been selected for an exclusive security upgrade. Confirm your identity within 30 minutes to avoid a temporary lock. Use the secure link below to continue.</textarea>
+                    <div class="text-editor-footer"><span><i class="fa-solid fa-language"></i> 42 languages supported</span><span id="wordCount">0 words</span></div>
+                  </div>
+                  <div class="sample-row"><span>Try a signal preset</span><button type="button" class="sample-button" data-sample="phishing"><i class="fa-solid fa-fish-fins"></i> Phishing lure</button><button type="button" class="sample-button" data-sample="clean-text"><i class="fa-solid fa-file-lines"></i> Editorial sample</button></div>
+                </div>
+              </div>
+
+              <div class="inspector-actions">
+                <div class="privacy-note"><span class="privacy-icon"><i class="fa-solid fa-fingerprint"></i></span><span><b>Private by design</b><small>Evidence is ephemeral and never used to train models.</small></span></div>
+                <button class="button button-primary scan-button" id="scanButton" type="button"><i class="fa-solid fa-radar"></i><span>Run deep scan</span><i class="fa-solid fa-arrow-right button-arrow"></i></button>
+              </div>
+            </div>
+
+            <div class="glass-panel results-panel" id="results">
+              <div class="results-header">
+                <div><div class="panel-kicker"><span class="live-dot"></span> VERDICT STREAM</div><h3>Analysis results</h3></div>
+                <div class="result-status safe" id="resultStatus"><span class="status-pulse"></span><span id="resultStatusText">LOW RISK · VERIFIED</span></div>
+              </div>
+              <div class="results-grid">
+                <div class="score-column">
+                  <div class="score-gauge" id="scoreGauge" style="--score: 98.4">
+                    <div class="gauge-inner"><span class="score-value" id="scoreValue">98.4</span><span class="score-unit">/ 100</span><small>TRUST SCORE</small></div>
+                  </div>
+                  <div class="score-caption"><i class="fa-solid fa-circle-check"></i><span id="scoreCaption">Evidence appears authentic</span></div>
+                </div>
+                <div class="signals-column">
+                  <div class="signals-heading"><span>Threat signal breakdown</span><span class="signals-legend"><i class="legend-safe"></i> Safe <i class="legend-review"></i> Review</span></div>
+                  <div class="signal-list" id="signalList">
+                    <div class="signal-row"><div class="signal-label"><span class="signal-icon safe"><i class="fa-solid fa-fingerprint"></i></span><span>Authenticity markers</span><b>99%</b></div><div class="meter"><span style="width: 99%"></span></div></div>
+                    <div class="signal-row"><div class="signal-label"><span class="signal-icon safe"><i class="fa-solid fa-code-branch"></i></span><span>Behavioral consistency</span><b>97%</b></div><div class="meter"><span style="width: 97%"></span></div></div>
+                    <div class="signal-row"><div class="signal-label"><span class="signal-icon safe"><i class="fa-solid fa-user-shield"></i></span><span>Threat indicators</span><b>96%</b></div><div class="meter"><span style="width: 96%"></span></div></div>
+                    <div class="signal-row"><div class="signal-label"><span class="signal-icon review"><i class="fa-solid fa-wand-magic-sparkles"></i></span><span>Generative artifacts</span><b>94%</b></div><div class="meter"><span class="review-meter" style="width: 94%"></span></div></div>
+                  </div>
+                  <div class="confidence-line"><span>Confidence <b id="confidenceValue">High</b></span><span class="confidence-track"><i style="width: 92%" id="confidenceTrack"></i></span><span id="confidencePercent">92%</span></div>
+                </div>
+              </div>
+              <div class="results-log">
+                <div class="log-heading"><span><i class="fa-solid fa-terminal"></i> Evidence log</span><button type="button" class="export-button" id="exportButton"><i class="fa-solid fa-arrow-up-from-bracket"></i> Export report</button></div>
+                <div class="log-list" id="logList" aria-live="polite">
+                  <div class="log-entry"><time>14:32:08</time><span class="log-mark success"><i class="fa-solid fa-check"></i></span><span>Cross-engine consensus reached</span><b>98.4%</b></div>
+                  <div class="log-entry"><time>14:32:07</time><span class="log-mark info"><i class="fa-solid fa-wave-square"></i></span><span>Compared against 2.84M forensic signals</span><b>1.8s</b></div>
+                  <div class="log-entry"><time>14:32:06</time><span class="log-mark violet"><i class="fa-solid fa-fingerprint"></i></span><span>Content provenance chain verified</span><b>PASS</b></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <aside class="workspace-sidebar" id="device-guardian">
+            <div class="glass-panel guardian-card">
+              <div class="card-heading"><div><div class="panel-kicker"><span class="live-dot"></span> DEVICE GUARDIAN</div><h3>Protected perimeter</h3></div><button type="button" class="icon-button" id="refreshDevices" aria-label="Refresh devices"><i class="fa-solid fa-rotate"></i></button></div>
+              <div class="guardian-score"><div class="guardian-ring"><i class="fa-solid fa-shield-halved"></i></div><div><strong>4 <span>/ 4</span></strong><small>devices shielded</small></div><span class="guardian-online"><i></i> Live</span></div>
+              <div class="device-list" id="deviceList">
+                <div class="device-row"><span class="device-logo mac"><i class="fa-brands fa-apple"></i></span><span class="device-info"><b>MacBook Pro</b><small>Chrome · Cairo, EG</small></span><span class="device-state"><i></i>Protected</span></div>
+                <div class="device-row"><span class="device-logo phone"><i class="fa-solid fa-mobile-screen"></i></span><span class="device-info"><b>iPhone 15 Pro</b><small>Safari · Cairo, EG</small></span><span class="device-state"><i></i>Protected</span></div>
+                <div class="device-row"><span class="device-logo windows"><i class="fa-brands fa-windows"></i></span><span class="device-info"><b>Studio workstation</b><small>Edge · London, UK</small></span><span class="device-state"><i></i>Protected</span></div>
+                <div class="device-row"><span class="device-logo linux"><i class="fa-brands fa-linux"></i></span><span class="device-info"><b>Analysis node</b><small>Firefox · Frankfurt, DE</small></span><span class="device-state"><i></i>Protected</span></div>
+              </div>
+              <button class="manage-link" id="manageDevices" type="button">Manage protected devices <i class="fa-solid fa-arrow-right"></i></button>
+            </div>
+
+            <div class="glass-panel threat-card">
+              <div class="card-heading"><div><div class="panel-kicker violet-kicker"><span class="live-dot"></span> THREAT LANDSCAPE</div><h3>Signal activity</h3></div><span class="time-select">24H <i class="fa-solid fa-chevron-down"></i></span></div>
+              <div class="chart-wrap"><div class="chart-y-labels"><span>100</span><span>50</span><span>0</span></div><div class="activity-chart"><div class="chart-grid"></div><svg viewBox="0 0 330 118" preserveAspectRatio="none" aria-label="Signal activity chart" role="img"><defs><linearGradient id="chartFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#7d73ff" stop-opacity=".3"/><stop offset="1" stop-color="#7d73ff" stop-opacity="0"/></linearGradient><linearGradient id="chartStroke" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#42e5ff"/><stop offset="1" stop-color="#9a7bff"/></linearGradient></defs><path class="chart-area" d="M0,91 C18,86 22,63 43,69 S70,82 83,59 S107,66 123,48 S144,57 159,34 S185,55 200,45 S223,55 239,27 S259,46 276,32 S302,38 330,14 L330,118 L0,118 Z"/><path class="chart-line" d="M0,91 C18,86 22,63 43,69 S70,82 83,59 S107,66 123,48 S144,57 159,34 S185,55 200,45 S223,55 239,27 S259,46 276,32 S302,38 330,14"/><circle cx="239" cy="27" r="4"></circle></svg><div class="chart-tooltip"><b>72</b><small>08:00 UTC</small></div></div></div>
+              <div class="chart-legend"><span><i class="legend-safe"></i> Verified signals</span><span><i class="legend-review"></i> Flagged signals</span></div>
+            </div>
+
+            <div class="glass-panel protocol-card" id="settings">
+              <div class="protocol-icon"><i class="fa-solid fa-sliders"></i></div><div><div class="panel-kicker">PROTOCOL DEFAULTS</div><strong>Adaptive protection</strong><small>Precision mode · Auto-update on</small></div><button class="toggle active" id="protectionToggle" type="button" aria-label="Toggle adaptive protection" aria-pressed="true"><span></span></button>
+            </div>
+          </aside>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer shell">
+      <a class="brand footer-brand" href="#overview"><span class="brand-mark"><span></span><span></span><span></span></span><span class="brand-copy"><strong>VERITAS<span>//</span>INSPECTOR</strong></span></a>
+      <span>Built for a world that needs proof.</span>
+      <span class="footer-right"><i class="fa-solid fa-circle-nodes"></i> Intelligence mesh operational <span class="footer-divider"></span> © 2026 Veritas Labs</span>
+    </footer>
+
+    <div class="toast-container" id="toastContainer" aria-live="polite"></div>
+    <script src="app.js" defer></script>
+  </body>
+</html>
