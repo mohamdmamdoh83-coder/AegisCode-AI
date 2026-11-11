@@ -14,6 +14,13 @@
     liveAnalysisTimer: null,
     fileAnalysisToken: 0,
     lastEvidenceFingerprint: '',
+    alertSoundEnabled: true,
+    activeAlertFingerprint: '',
+    dismissedAlertFingerprint: '',
+    lastAlertSeverity: '',
+    lastAlertSource: '',
+    lastAlertRisk: 0,
+    audioContext: null,
     scanTimer: null,
     scanProgress: 0,
     lastResult: {
@@ -107,6 +114,7 @@ if (next && !next.startsWith('https://trusted.example')) {
     bindMediaInput();
     bindEditorTools();
     bindScanControls();
+    bindAlertControls();
     bindDeviceControls();
     bindSamples();
     updateCounters();
@@ -196,7 +204,7 @@ if (next && !next.startsWith('https://trusted.example')) {
       panel.hidden = !active;
     });
     if (!state.scanning) {
-      applyResult(modeCopy[mode]);
+      applyResult(modeCopy[mode], { silent: true });
       if (mode === 'code') scheduleCodeAnalysis(true);
       if (mode === 'text') scheduleTextAnalysis(true);
     }
@@ -329,7 +337,7 @@ if (next && !next.startsWith('https://trusted.example')) {
     $('#previewName').textContent = kind === 'video' ? 'synthetic-motion-frame.mp4' : 'synthetic-portrait-sample.png';
     $('#previewMeta').textContent = kind === 'video' ? 'Video frame · 18.7 MB' : 'Image · 2.4 MB';
     const presetResult = resultForCurrentEvidence();
-    applyResult(presetResult);
+    applyResult(presetResult, { sourceType: 'media' });
     appendLiveEvidence(presetResult, 'media');
     showToast(`${kind === 'video' ? 'Video frame' : 'Synthetic portrait'} preset loaded.`, 'fa-wand-magic-sparkles');
   }
@@ -611,7 +619,7 @@ if (next && !next.startsWith('https://trusted.example')) {
     if (state.mode !== 'code' || state.scanning) return;
     const result = analyzeCodeEvidence($('#codeInput')?.value || '');
     state.latestCodeAnalysis = result;
-    applyResult(result);
+    applyResult(result, { sourceType: 'code' });
     if (result.metrics && !result.metrics.empty) appendLiveEvidence(result, 'code');
   }
 
@@ -649,7 +657,7 @@ if (next && !next.startsWith('https://trusted.example')) {
     const run = () => {
       if (state.mode !== 'text' || state.scanning) return;
       const result = analyzeTextEvidence($('#textInput')?.value || '');
-      applyResult(result);
+      applyResult(result, { sourceType: 'text' });
       if (result.metrics && !result.metrics.empty) appendLiveEvidence(result, 'text');
     };
     if (immediate) run();
@@ -710,13 +718,13 @@ if (next && !next.startsWith('https://trusted.example')) {
           ['Threat indicators', fixed(100 - risk), risk > 35 ? 'review' : 'safe', 'fa-user-shield'],
           ['Generative artifacts', fixed(100 - generativeRisk), generativeRisk ? 'review' : 'safe', 'fa-wand-magic-sparkles']
         ],
-        metrics: { fileName: file.name, sizeBytes: file.size, mimeType: file.type || 'unknown', signature, byteEntropy: fixed(entropy), sha256: digest, suspiciousName, risk: fixed(risk) },
+        metrics: { fileName: file.name, sizeBytes: file.size, mimeType: file.type || 'unknown', signature, byteEntropy: fixed(entropy), sha256: digest, suspiciousName, generativeArtifactIndex: fixed(generativeRisk), risk: fixed(risk) },
         evidenceFingerprint: `file:${digest}`,
         logSummary: `Media integrity pass · ${signature} · H ${fixed(entropy, 2)} · sha256 ${digest.slice(0, 12)}…`,
         logDetail: `Container ${signatureRisk ? 'mismatch' : 'consistent'} · generative artifact index ${fixed(generativeRisk, 2)} · ${formatBytes(file.size)}`
       };
       state.fileAnalysis = result;
-      applyResult(result);
+      applyResult(result, { sourceType: 'media' });
       appendLiveEvidence(result, 'media');
       showToast(`Integrity metrics ready · SHA-256 ${digest.slice(0, 10)}…`, 'fa-fingerprint');
     } catch (error) {
@@ -803,7 +811,7 @@ if (next && !next.startsWith('https://trusted.example')) {
     if (label) label.textContent = 'Run deep scan';
 
     const result = resultForCurrentEvidence();
-    applyResult(result);
+    applyResult(result, { sourceType: state.mode });
     appendLog(result);
     showToast('Deep scan complete. Verdict stream updated.', result.status === 'danger' ? 'fa-triangle-exclamation' : 'fa-shield-halved');
   }
@@ -839,7 +847,7 @@ if (next && !next.startsWith('https://trusted.example')) {
     return analyzeTextEvidence($('#textInput')?.value || '');
   }
 
-  function applyResult(result) {
+  function applyResult(result, options = {}) {
     if (!result) return;
     state.lastResult = result;
     const gauge = $('#scoreGauge');
@@ -878,6 +886,8 @@ if (next && !next.startsWith('https://trusted.example')) {
         meter.style.width = `${value}%`;
       }
     });
+    if (options.silent) clearActiveThreatAlert();
+    else evaluateThreatAlert(result, options.sourceType);
   }
 
   function appendLog(result) {
@@ -896,6 +906,173 @@ if (next && !next.startsWith('https://trusted.example')) {
 
   function escapeHtml(value) {
     return String(value).replace(/[&<>'"]/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#039;', '"': '&quot;' }[character]));
+  }
+
+  function bindAlertControls() {
+    $('#dismissThreatAlert')?.addEventListener('click', dismissThreatAlert);
+    $('#reviewThreatAlert')?.addEventListener('click', () => {
+      scrollTo('results');
+      showToast('Evidence stream focused below.', 'fa-arrow-down');
+    });
+    $('#alertSoundToggle')?.addEventListener('click', () => {
+      state.alertSoundEnabled = !state.alertSoundEnabled;
+      updateAlertSoundControl();
+      if (state.alertSoundEnabled) playAlertTone('review');
+    });
+    updateAlertSoundControl();
+  }
+
+  function updateAlertSoundControl() {
+    const button = $('#alertSoundToggle');
+    const label = $('#alertSoundLabel');
+    if (!button) return;
+    button.classList.toggle('muted', !state.alertSoundEnabled);
+    button.setAttribute('aria-pressed', String(state.alertSoundEnabled));
+    button.setAttribute('aria-label', state.alertSoundEnabled ? 'Mute threat alert sound' : 'Unmute threat alert sound');
+    if (label) label.textContent = state.alertSoundEnabled ? 'SOUND ON' : 'MUTED';
+  }
+
+  function threatAlertPayload(result, sourceType) {
+    if (!result || !result.evidenceFingerprint) return null;
+    const metrics = result.metrics || {};
+    const injection = Number(metrics.injectionIndex ?? metrics.threatBreakdown?.injectionRisk ?? 0);
+    const obfuscation = Number(metrics.obfuscationIndex ?? metrics.threatBreakdown?.obfuscationRisk ?? 0);
+    const generative = Number(metrics.generativeArtifactIndex ?? 0);
+    const contentRisk = Number(metrics.risk ?? metrics.threatRisk ?? (100 - Number(result.score || 100)));
+    const critical = result.status === 'danger' || injection >= 48 || generative >= 70 || contentRisk >= 62;
+    const review = result.status === 'review' || injection >= 28 || obfuscation >= 65 || contentRisk >= 30;
+    if (!critical && !review) return null;
+
+    const source = sourceType || (metrics.fileName ? 'media' : metrics.language ? 'code' : 'text');
+    const severity = critical ? 'critical' : 'review';
+    let title = 'Suspicious signal detected';
+    if (source === 'code' && critical) title = 'Malicious code pattern detected';
+    else if (source === 'media' && (generative >= 70 || result.status === 'danger')) title = 'Deepfake artifact signature detected';
+    else if (source === 'text' && critical) title = 'Phishing intent detected';
+    else if (source === 'code') title = 'Code anomaly requires review';
+    else if (source === 'media') title = 'Media integrity signal requires review';
+    else if (source === 'text') title = 'Social-engineering signal requires review';
+
+    const sourceLabel = source === 'code' ? 'DOM / CODE ANALYSIS' : source === 'media' ? 'MEDIA FORENSICS' : 'TEXT SHIELD';
+    const message = critical
+      ? (source === 'media' ? 'Generative-artifact or container signals crossed the active protection threshold.' : source === 'code' ? 'Execution, decoder, redirect, or data-sink behavior crossed the active protection threshold.' : 'Urgency and credential-harvesting language crossed the active protection threshold.')
+      : 'The inspection engine found a measurable anomaly. Evidence is held for analyst review.';
+    const evidence = source === 'code'
+      ? `C ${Number(metrics.cyclomaticComplexity || 1).toFixed(1)} · H ${Number(metrics.entropyIndex || 0).toFixed(1)} · injection ${injection.toFixed(1)}`
+      : source === 'media'
+        ? `${metrics.signature || 'container'} · H ${Number(metrics.byteEntropy || 0).toFixed(1)} · ${metrics.sha256 ? metrics.sha256.slice(0, 12) : 'digest pending'}…`
+        : `urgency ${metrics.urgencySignals || 0} · credential terms ${metrics.credentialSignals || 0}`;
+    const risk = clamp(Math.max(contentRisk, injection, generative * 0.8, 100 - Number(result.score || 100)));
+    return {
+      fingerprint: result.evidenceFingerprint,
+      severity,
+      source,
+      sourceLabel,
+      title,
+      message,
+      evidence,
+      risk,
+      score: Number(result.score || 0),
+      icon: critical ? 'fa-triangle-exclamation' : 'fa-eye'
+    };
+  }
+
+  function evaluateThreatAlert(result, sourceType) {
+    const payload = threatAlertPayload(result, sourceType);
+    if (!payload) {
+      clearActiveThreatAlert();
+      return;
+    }
+    if (state.dismissedAlertFingerprint === payload.fingerprint) return;
+
+    const materialChange = state.activeAlertFingerprint !== payload.fingerprint
+      || state.lastAlertSeverity !== payload.severity
+      || state.lastAlertSource !== payload.source
+      || Math.abs(payload.risk - state.lastAlertRisk) >= 8;
+    state.activeAlertFingerprint = payload.fingerprint;
+    state.lastAlertSeverity = payload.severity;
+    state.lastAlertSource = payload.source;
+    state.lastAlertRisk = payload.risk;
+    renderActiveThreatAlert(payload);
+    if (materialChange) {
+      createThreatNotification(payload);
+      playAlertTone(payload.severity);
+    }
+  }
+
+  function renderActiveThreatAlert(payload) {
+    const shell = $('#threatAlertShell');
+    const banner = $('#threatAlertBanner');
+    if (!shell || !banner) return;
+    shell.hidden = false;
+    banner.className = `threat-alert-banner ${payload.severity}`;
+    $('#alertSeverity').textContent = payload.severity === 'critical' ? 'CRITICAL SIGNAL' : 'REVIEW REQUIRED';
+    $('#alertTitle').textContent = payload.title;
+    $('#alertMessage').textContent = payload.message;
+    $('#alertEvidence').textContent = `${payload.sourceLabel} · ${payload.evidence}`;
+    $('#alertScore').textContent = `RISK ${payload.risk.toFixed(1)}`;
+  }
+
+  function createThreatNotification(payload) {
+    const stack = $('#threatNotificationStack');
+    if (!stack) return;
+    const notification = document.createElement('article');
+    notification.className = `threat-notification ${payload.severity === 'review' ? 'review' : ''}`;
+    notification.setAttribute('role', 'status');
+    notification.innerHTML = `<span class="notification-icon"><i class="fa-solid ${payload.icon}"></i></span><span class="notification-copy"><b>${escapeHtml(payload.title)}</b><span>${escapeHtml(payload.message)}</span><small>${escapeHtml(payload.sourceLabel)} · RISK ${payload.risk.toFixed(1)}</small><span class="notification-sound" aria-hidden="true"><i></i><i></i><i></i></span></span><button class="notification-close" type="button" aria-label="Dismiss threat notification"><i class="fa-solid fa-xmark"></i></button>`;
+    notification.querySelector('.notification-close')?.addEventListener('click', () => closeThreatNotification(notification));
+    stack.prepend(notification);
+    while (stack.children.length > 3) stack.lastElementChild.remove();
+    window.setTimeout(() => closeThreatNotification(notification), 7200);
+  }
+
+  function closeThreatNotification(notification) {
+    if (!notification || notification.classList.contains('is-closing')) return;
+    notification.classList.add('is-closing');
+    window.setTimeout(() => notification.remove(), 260);
+  }
+
+  function clearActiveThreatAlert() {
+    const shell = $('#threatAlertShell');
+    if (shell) shell.hidden = true;
+    state.activeAlertFingerprint = '';
+    state.dismissedAlertFingerprint = '';
+    state.lastAlertSeverity = '';
+    state.lastAlertSource = '';
+    state.lastAlertRisk = 0;
+  }
+
+  function dismissThreatAlert() {
+    const shell = $('#threatAlertShell');
+    if (!shell) return;
+    state.dismissedAlertFingerprint = state.activeAlertFingerprint;
+    shell.hidden = true;
+    showToast('Threat alert dismissed. Protection remains active.', 'fa-shield-halved');
+  }
+
+  function playAlertTone(severity = 'critical') {
+    if (!state.alertSoundEnabled) return;
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextClass) return;
+    try {
+      state.audioContext ||= new AudioContextClass();
+      const context = state.audioContext;
+      const now = context.currentTime;
+      const oscillator = context.createOscillator();
+      const gain = context.createGain();
+      oscillator.type = severity === 'critical' ? 'sawtooth' : 'triangle';
+      oscillator.frequency.setValueAtTime(severity === 'critical' ? 620 : 440, now);
+      oscillator.frequency.exponentialRampToValueAtTime(severity === 'critical' ? 330 : 290, now + .18);
+      gain.gain.setValueAtTime(.0001, now);
+      gain.gain.exponentialRampToValueAtTime(.045, now + .015);
+      gain.gain.exponentialRampToValueAtTime(.0001, now + .22);
+      oscillator.connect(gain).connect(context.destination);
+      oscillator.start(now);
+      oscillator.stop(now + .24);
+      if (context.state === 'suspended') context.resume().catch(() => {});
+    } catch (error) {
+      // Audio is an enhancement; the visual waveform and banner remain active.
+    }
   }
 
   function bindDeviceControls() {

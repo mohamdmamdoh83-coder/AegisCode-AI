@@ -65,3 +65,4 @@ curl -X POST http://localhost:8000/api/v1/filter-threat \\
 - Device Guardian perimeter widget, activity chart, adaptive protection toggle, toast feedback, and local report export.
 - Tailwind CSS and Font Awesome loaded via CDN; app behavior is implemented in vanilla JavaScript.
 - Browser-side live inspection engine recalculates AST-like complexity, loop density, Shannon entropy, obfuscation, injection, file signature, and SHA-256 signals as evidence changes.
+- Real-time cyberpunk threat alerts raise an active banner, animated notification popups, visual sound-wave indicators, optional alert tones, and dismissal/review controls for malicious or suspicious findings.
