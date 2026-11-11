@@ -35,6 +35,26 @@ curl -X POST http://localhost:8000/api/v1/inspect-code \\
 
 The response includes `trust_score`, `verification_status` (`SECURE`, `REVIEW_REQUIRED`, or `MALICIOUS`), `confidence_index`, normalized threat breakdowns, syntax anomalies, metrics, and analysis logs. Syntax errors are returned as evidence with conservative scoring rather than causing a server error.
 
+## Threat filtering core
+
+`threat_filter_core.py` adds a modular, read-only endpoint-protection pipeline. It hashes and inspects file or binary payloads, checks PE/ELF/Mach-O headers and script structure, analyzes URLs and network payloads for phishing and injection patterns, and scores caller-provided process snapshots for memory injection and suspicious command lines.
+
+The same service exposes:
+
+```text
+POST /api/v1/filter-threat
+```
+
+JSON requests can contain `file_content_base64` plus `file_name`, `source_code` or `code`, `url`, `network_payload`, and `processes`. Multipart file uploads and raw `application/octet-stream` uploads are also accepted. Every response returns an immediate `ALLOW`, `QUARANTINE`, or `BLOCK` action, a 0–100 threat level index, confidence, component reports, hashes, indicators, policy reasons, and structured forensic logs. No submitted file is executed and no external reputation service is contacted.
+
+Example URL inspection:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/filter-threat \\
+  -H 'content-type: application/json' \\
+  -d '{"payload_type":"url","url":"https://secure-login.example.top/verify?redirect=https%3A%2F%2Fevil.example"}'
+```
+
 ## Included
 
 - Futuristic dark-mode dashboard with responsive mobile navigation.
