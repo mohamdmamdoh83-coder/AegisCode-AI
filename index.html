@@ -89,6 +89,25 @@
       </div>
     </header>
 
+    <section class="threat-alert-shell" id="threatAlertShell" hidden aria-live="assertive" aria-atomic="true">
+      <div class="threat-alert-banner" id="threatAlertBanner" role="alert">
+        <div class="alert-scanline" aria-hidden="true"></div>
+        <div class="alert-siren" aria-hidden="true"><i class="fa-solid fa-tower-broadcast"></i><span></span><span></span></div>
+        <div class="alert-copy">
+          <div class="alert-meta"><span class="alert-kicker"><i class="fa-solid fa-triangle-exclamation"></i> ACTIVE THREAT ALERT</span><span class="alert-severity" id="alertSeverity">CRITICAL SIGNAL</span><span class="alert-live"><i></i> LIVE</span></div>
+          <strong id="alertTitle">Malicious behavior detected</strong>
+          <p id="alertMessage">The inspection engine found a signal that needs immediate review.</p>
+          <div class="alert-evidence"><span><i class="fa-solid fa-fingerprint"></i> <b id="alertEvidence">Evidence stream locked</b></span><span class="alert-score" id="alertScore">RISK 92.0</span></div>
+        </div>
+        <div class="alert-actions">
+          <button class="alert-review-button" id="reviewThreatAlert" type="button"><i class="fa-solid fa-arrow-up-right-from-square"></i> Review evidence</button>
+          <button class="alert-sound-button" id="alertSoundToggle" type="button" aria-pressed="true" aria-label="Mute threat alert sound"><span class="sound-wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span><span id="alertSoundLabel">SOUND ON</span></button>
+          <button class="alert-dismiss-button" id="dismissThreatAlert" type="button" aria-label="Dismiss active threat alert"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+      </div>
+    </section>
+    <div class="threat-notification-stack" id="threatNotificationStack" aria-live="polite" aria-label="Threat notifications"></div>
+
     <main>
       <section class="hero shell" id="overview">
         <div class="hero-copy">
