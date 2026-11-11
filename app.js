@@ -9,6 +9,11 @@
     scanning: false,
     file: null,
     demoMedia: false,
+    codeFile: null,
+    fileAnalysis: null,
+    liveAnalysisTimer: null,
+    fileAnalysisToken: 0,
+    lastEvidenceFingerprint: '',
     scanTimer: null,
     scanProgress: 0,
     lastResult: {
@@ -192,6 +197,8 @@ if (next && !next.startsWith('https://trusted.example')) {
     });
     if (!state.scanning) {
       applyResult(modeCopy[mode]);
+      if (mode === 'code') scheduleCodeAnalysis(true);
+      if (mode === 'text') scheduleTextAnalysis(true);
     }
   }
 
@@ -234,18 +241,43 @@ if (next && !next.startsWith('https://trusted.example')) {
 
   function handleFile(file) {
     if (!file) return;
-    if (!file.type.startsWith('image/') && !file.type.startsWith('video/')) {
-      showToast('Unsupported file type. Add an image or video evidence file.', 'fa-circle-exclamation');
-      return;
-    }
     if (file.size > 250 * 1024 * 1024) {
       showToast('That file is larger than the 250 MB evidence limit.', 'fa-circle-exclamation');
       return;
     }
+
+    const extension = file.name.toLowerCase().match(/\.[a-z0-9]+$/)?.[0] || '';
+    const codeFile = file.type.startsWith('text/') || /\.(py|js|jsx|ts|tsx|json|html|css|sh|bash|ps1|txt)$/.test(extension);
+    if (codeFile && !file.type.startsWith('image/') && !file.type.startsWith('video/')) {
+      state.codeFile = file;
+      state.file = null;
+      state.fileAnalysis = null;
+      file.text().then((source) => {
+        setMode('code');
+        const input = $('#codeInput');
+        if (input) input.value = source;
+        updateCounters();
+        scheduleCodeAnalysis(true);
+        showToast(`Source file loaded: ${file.name}`, 'fa-code');
+        scrollTo('scanner');
+      }).catch(() => {
+        showToast('The source file could not be read safely.', 'fa-circle-exclamation');
+      });
+      return;
+    }
+
+    if (!file.type.startsWith('image/') && !file.type.startsWith('video/')) {
+      showToast('Unsupported file type. Add media or a Python/JavaScript source file.', 'fa-circle-exclamation');
+      return;
+    }
     state.file = file;
+    state.codeFile = null;
+    state.fileAnalysis = null;
+    state.fileAnalysisToken += 1;
     state.demoMedia = false;
     renderMediaPreview(file);
-    showToast('Evidence loaded and ready for a deep scan.', 'fa-circle-check');
+    showToast('Evidence loaded. Computing cryptographic and media integrity signals…', 'fa-circle-check');
+    inspectMediaFile(file);
   }
 
   function renderMediaPreview(file) {
@@ -281,6 +313,9 @@ if (next && !next.startsWith('https://trusted.example')) {
     const thumb = $('#previewThumb');
     if (!preview || !thumb) return;
     state.file = null;
+    state.codeFile = null;
+    state.fileAnalysis = null;
+    state.fileAnalysisToken += 1;
     state.demoMedia = true;
     dropZone.hidden = true;
     preview.hidden = false;
@@ -293,11 +328,17 @@ if (next && !next.startsWith('https://trusted.example')) {
       : 'radial-gradient(circle at 52% 35%, #f2b99a 0 12%, transparent 13%), radial-gradient(circle at 51% 55%, #7b5aff 0 18%, transparent 19%), linear-gradient(145deg, #163943, #203056 53%, #8d5b9e)';
     $('#previewName').textContent = kind === 'video' ? 'synthetic-motion-frame.mp4' : 'synthetic-portrait-sample.png';
     $('#previewMeta').textContent = kind === 'video' ? 'Video frame · 18.7 MB' : 'Image · 2.4 MB';
+    const presetResult = resultForCurrentEvidence();
+    applyResult(presetResult);
+    appendLiveEvidence(presetResult, 'media');
     showToast(`${kind === 'video' ? 'Video frame' : 'Synthetic portrait'} preset loaded.`, 'fa-wand-magic-sparkles');
   }
 
   function clearMedia() {
     state.file = null;
+    state.codeFile = null;
+    state.fileAnalysis = null;
+    state.fileAnalysisToken += 1;
     state.demoMedia = false;
     const input = $('#fileInput');
     if (input) input.value = '';
@@ -317,12 +358,19 @@ if (next && !next.startsWith('https://trusted.example')) {
   }
 
   function bindEditorTools() {
-    $('#codeInput')?.addEventListener('input', updateCounters);
-    $('#textInput')?.addEventListener('input', updateCounters);
+    $('#codeInput')?.addEventListener('input', () => {
+      updateCounters();
+      scheduleCodeAnalysis();
+    });
+    $('#textInput')?.addEventListener('input', () => {
+      updateCounters();
+      scheduleTextAnalysis();
+    });
     $('#clearTextButton')?.addEventListener('click', () => {
       const textInput = $('#textInput');
       if (textInput) textInput.value = '';
       updateCounters();
+      scheduleTextAnalysis(true);
       showToast('Evidence text cleared.', 'fa-eraser');
     });
     $('#pasteButton')?.addEventListener('click', async () => {
@@ -331,6 +379,7 @@ if (next && !next.startsWith('https://trusted.example')) {
         if (!value) throw new Error('empty');
         $('#textInput').value = value;
         updateCounters();
+        scheduleTextAnalysis(true);
         showToast('Clipboard evidence pasted.', 'fa-paste');
       } catch (error) {
         showToast('Clipboard access is unavailable. Paste directly into the evidence field.', 'fa-keyboard');
@@ -346,6 +395,355 @@ if (next && !next.startsWith('https://trusted.example')) {
     if ($('#wordCount')) $('#wordCount').textContent = `${words.toLocaleString()} words`;
   }
 
+  function clamp(value, min = 0, max = 100) {
+    return Math.min(max, Math.max(min, Number(value) || 0));
+  }
+
+  function fixed(value, digits = 1) {
+    return Number(Number(value).toFixed(digits));
+  }
+
+  function countPattern(source, pattern) {
+    if (!source || !pattern) return 0;
+    const flags = pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`;
+    return (source.match(new RegExp(pattern.source, flags)) || []).length;
+  }
+
+  function normalizedEntropy(values, cardinality) {
+    if (!values || values.length < 2) return 0;
+    const frequencies = new Map();
+    values.forEach((value) => frequencies.set(value, (frequencies.get(value) || 0) + 1));
+    const total = values.length;
+    let entropy = 0;
+    frequencies.forEach((frequency) => {
+      const probability = frequency / total;
+      entropy -= probability * Math.log2(probability);
+    });
+    const maximum = Math.log2(Math.max(2, cardinality || frequencies.size));
+    return clamp(maximum ? (entropy / maximum) * 100 : 0);
+  }
+
+  function textFingerprint(value) {
+    // FNV-1a is used as a synchronous evidence fingerprint while file uploads
+    // also receive a Web Crypto SHA-256 digest below.
+    let hash = 2166136261;
+    for (let index = 0; index < value.length; index += 1) {
+      hash ^= value.charCodeAt(index);
+      hash = Math.imul(hash, 16777619);
+    }
+    return (hash >>> 0).toString(16).padStart(8, '0');
+  }
+
+  function detectCodeLanguage(source) {
+    const pythonSignals = /(^|\n)\s*(?:def\s+\w+\s*\(|class\s+\w+\s*[:(]|from\s+\S+\s+import\s+|if\s+__name__\s*==)/m;
+    const javascriptSignals = /\b(?:const|let|var|function|console\.log|document\.|window\.)\b|=>/;
+    if (pythonSignals.test(source) && !javascriptSignals.test(source)) return 'Python';
+    return javascriptSignals.test(source) ? 'JavaScript' : 'Python';
+  }
+
+  function tokenizeForInspection(source) {
+    const withoutComments = source
+      .replace(/\/\*[\s\S]*?\*\//g, ' ')
+      .replace(/(^|[^:])\/\/[^\n]*/g, '$1 ')
+      .replace(/(^|\s)#[^\n]*/g, '$1 ');
+    return withoutComments.match(/(?:`(?:\\.|[^`])*`|"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[A-Za-z_$][\w$]*|\d+(?:\.\d+)?|===|!==|>>>|=>|==|!=|<=|>=|&&|\|\||\?\?|\+\+|--|\*\*|[{}()[\];,.:?+\-*\/%=<>!&|^~])/g) || [];
+  }
+
+  function inspectBracketSyntax(tokens) {
+    const openers = { '(': ')', '{': '}', '[': ']' };
+    const closers = { ')': '(', '}': '{', ']': '[' };
+    const stack = [];
+    const errors = [];
+    tokens.forEach((token, index) => {
+      if (/^[`'\"]/.test(token)) return;
+      if (openers[token]) stack.push({ token, index });
+      if (closers[token]) {
+        const last = stack.pop();
+        if (!last || last.token !== closers[token]) errors.push(`unexpected closing delimiter ${token}`);
+      }
+    });
+    stack.reverse().forEach((entry) => errors.push(`unclosed delimiter ${entry.token}`));
+    return errors;
+  }
+
+  const liveInjectionRules = [
+    ['dynamic_execution', /\b(?:eval|exec|compile|Function)\s*\(/i, 27],
+    ['runtime_import', /\b(?:__import__|require|importlib\.import_module)\s*\(/i, 19],
+    ['process_spawn', /\b(?:subprocess|child_process|os\.system|powershell|cmd\.exe)\b/i, 28],
+    ['encoded_decoder', /\b(?:atob|btoa|base64\.(?:b64)?decode|fromCharCode|unescape)\b/i, 23],
+    ['credential_access', /\b(?:document\.cookie|localStorage|sessionStorage|password|credential)\b/i, 20],
+    ['html_injection', /\b(?:innerHTML|outerHTML|insertAdjacentHTML|document\.write)\b/i, 18],
+    ['redirect_sink', /\b(?:window\.location|location\.href|fetch|XMLHttpRequest|requests?\.(?:get|post))\b/i, 10],
+    ['destructive_shell', /(?:rm\s+-rf|curl\s+[^\n]+\|\s*(?:sh|bash)|wget\s+[^\n]+\|\s*(?:sh|bash))/i, 35]
+  ];
+
+  function analyzeCodeEvidence(source) {
+    const code = String(source || '');
+    if (!code.trim()) return { ...modeCopy.code, metrics: { empty: true }, evidenceFingerprint: 'empty-code' };
+
+    const language = detectCodeLanguage(code);
+    const tokens = tokenizeForInspection(code);
+    const tokenEntropy = normalizedEntropy(tokens, Math.max(2, Math.min(tokens.length, 64)));
+    const visibleCharacters = Array.from(code).filter((character) => !/\s/.test(character));
+    const characterEntropy = normalizedEntropy(visibleCharacters, 95);
+    const entropyIndex = clamp(characterEntropy * 0.65 + tokenEntropy * 0.35);
+    const logicalLines = Math.max(1, code.split(/\r?\n/).filter((line) => line.trim() && !line.trim().startsWith('#') && !line.trim().startsWith('//')).length);
+    const keywordTokens = tokens.map((token) => token.toLowerCase());
+    const loopCount = keywordTokens.filter((token) => ['for', 'while', 'foreach', 'do'].includes(token)).length;
+    const decisions = keywordTokens.filter((token) => ['if', 'elif', 'case', 'catch', 'except', 'for', 'while', 'foreach'].includes(token)).length;
+    const booleanDecisions = keywordTokens.filter((token) => ['&&', '||', '??', '?', 'and', 'or'].includes(token)).length;
+    const complexity = 1 + decisions + booleanDecisions;
+    const structuralNodes = tokens.filter((token) => /^[{}()[\]]$/.test(token)).length;
+    const syntaxNodeCount = Math.max(logicalLines, tokens.length + structuralNodes);
+    const loopDensity = loopCount / Math.max(1, syntaxNodeCount);
+    const syntaxErrors = inspectBracketSyntax(tokens);
+    if (/^\s*(?:def|class)\b[^:\n]*$/m.test(code)) syntaxErrors.push('Python declaration is missing a colon');
+
+    let injectionRisk = 0;
+    const injectionFlags = [];
+    liveInjectionRules.forEach(([name, pattern, weight]) => {
+      if (pattern.test(code)) {
+        injectionFlags.push(name);
+        injectionRisk += weight;
+      }
+    });
+    if (injectionFlags.length > 1) injectionRisk += Math.min(18, (injectionFlags.length - 1) * 4.5);
+    injectionRisk = clamp(injectionRisk);
+
+    const stringTokens = tokens.filter((token) => /^[`'\"]/.test(token));
+    const longLiterals = stringTokens.filter((token) => token.length >= 48).length;
+    const base64Hits = countPattern(code, /[A-Za-z0-9+/]{40,}={0,2}/);
+    const escapedHits = countPattern(code, /(?:\\x[0-9a-f]{2}|\\u[0-9a-f]{4}){3,}/i);
+    const longIdentifiers = countPattern(code, /\b[A-Za-z_$][A-Za-z0-9_$]{32,}\b/);
+    const longestLine = code.split(/\r?\n/).reduce((longest, line) => Math.max(longest, line.length), 0);
+    const whitespaceRatio = (code.match(/\s/g) || []).length / Math.max(1, code.length);
+    const obfuscationSignals = clamp(
+      longLiterals * 22 + base64Hits * 31 + escapedHits * 24 + longIdentifiers * 11
+      + (longestLine >= 240 ? 18 : 0) + (code.length >= 300 && whitespaceRatio < 0.08 ? 12 : 0)
+    );
+    const obfuscationRisk = clamp(entropyIndex * 0.62 + obfuscationSignals * 0.38);
+    const complexityRisk = clamp(((complexity - 1) / 24) * 100);
+    const loopRisk = clamp(loopDensity * 400);
+    const syntaxRisk = syntaxErrors.length ? 100 : 0;
+    const weightedRisk = syntaxRisk * 0.12 + complexityRisk * 0.16 + loopRisk * 0.07 + entropyIndex * 0.18 + obfuscationRisk * 0.17 + injectionRisk * 0.30;
+    let score = clamp(100 - weightedRisk);
+
+    let status = 'safe';
+    let statusText = 'LOW RISK · SOURCE VERIFIED';
+    let caption = 'No high-confidence manipulation detected';
+    if (injectionRisk >= 62 || (injectionRisk >= 50 && obfuscationRisk >= 42) || (injectionRisk >= 48 && entropyIndex >= 72)) {
+      status = 'danger';
+      statusText = 'HIGH RISK · INJECTION PATH';
+      caption = 'Execution, decoding, or data-sink behavior requires containment';
+      score = Math.min(score, 39.9);
+    } else if (syntaxErrors.length || score < 75 || obfuscationRisk >= 78 || entropyIndex >= 90) {
+      status = 'review';
+      statusText = syntaxErrors.length ? 'REVIEW · SYNTAX ANOMALY' : 'REVIEW · OBFUSCATION SIGNALS';
+      caption = syntaxErrors.length ? 'Malformed syntax reduces verification confidence' : 'Entropy and structure require analyst review';
+      score = Math.min(score, 74.9);
+    }
+
+    const confidence = clamp(82 + Math.min(10, syntaxNodeCount / 12) + Math.min(5, tokens.length / 30) - (syntaxErrors.length ? 18 : 0) - (tokens.length < 4 ? 8 : 0));
+    const flags = [
+      ...syntaxErrors.map((error) => `syntax:${error}`),
+      ...injectionFlags.map((flag) => `injection:${flag}`),
+      ...(entropyIndex >= 76 ? ['obfuscation:high_entropy_stream'] : []),
+      ...(base64Hits || longLiterals ? ['obfuscation:opaque_literal'] : []),
+      ...(escapedHits ? ['obfuscation:escaped_payload'] : []),
+      ...(complexity >= 12 ? ['complexity:high_cyclomatic'] : []),
+      ...(loopDensity >= 0.2 ? ['complexity:loop_dense'] : [])
+    ];
+    const threatBreakdown = {
+      syntaxRisk: fixed(syntaxRisk),
+      complexityRisk: fixed(complexityRisk),
+      loopDensityRisk: fixed(loopRisk),
+      entropyRisk: fixed(entropyIndex),
+      obfuscationRisk: fixed(obfuscationRisk),
+      injectionRisk: fixed(injectionRisk)
+    };
+    const metrics = {
+      language,
+      lineCount: logicalLines,
+      tokenCount: tokens.length,
+      syntaxNodeCount,
+      cyclomaticComplexity: fixed(complexity),
+      loopCount,
+      loopDensity: fixed(loopDensity, 4),
+      characterEntropy: fixed(characterEntropy),
+      tokenEntropy: fixed(tokenEntropy),
+      entropyIndex: fixed(entropyIndex),
+      obfuscationIndex: fixed(obfuscationRisk),
+      injectionIndex: fixed(injectionRisk),
+      syntaxErrors,
+      threatBreakdown
+    };
+    return {
+      score: fixed(score),
+      status,
+      statusText,
+      caption,
+      confidence: confidence >= 94 ? 'Very high' : confidence >= 82 ? 'High' : 'Moderate',
+      confidencePercent: fixed(confidence),
+      signals: [
+        ['Syntax integrity', syntaxErrors.length ? 18 : 99, syntaxErrors.length ? 'review' : 'safe', 'fa-code'],
+        ['Complexity consistency', fixed(100 - complexityRisk * 0.7), complexityRisk >= 55 ? 'review' : 'safe', 'fa-code-branch'],
+        ['Injection indicators', fixed(100 - injectionRisk), injectionRisk >= 35 ? 'review' : 'safe', 'fa-user-shield'],
+        ['Entropy / obfuscation', fixed(100 - obfuscationRisk), obfuscationRisk >= 65 ? 'review' : 'safe', 'fa-wand-magic-sparkles']
+      ],
+      metrics,
+      anomalyFlags: flags,
+      evidenceFingerprint: `code:${language}:${textFingerprint(code)}`,
+      logSummary: `${language} AST pass · ${syntaxNodeCount} nodes · C ${fixed(complexity, 2)} · H ${fixed(entropyIndex, 2)}`,
+      logDetail: `Loop density ${fixed(loopDensity, 4)} · injection ${fixed(injectionRisk, 2)} · obfuscation ${fixed(obfuscationRisk, 2)}`
+    };
+  }
+
+  function scheduleCodeAnalysis(immediate = false) {
+    window.clearTimeout(state.liveAnalysisTimer);
+    if (immediate) {
+      runLiveCodeAnalysis();
+      return;
+    }
+    state.liveAnalysisTimer = window.setTimeout(runLiveCodeAnalysis, 260);
+  }
+
+  function runLiveCodeAnalysis() {
+    if (state.mode !== 'code' || state.scanning) return;
+    const result = analyzeCodeEvidence($('#codeInput')?.value || '');
+    state.latestCodeAnalysis = result;
+    applyResult(result);
+    if (result.metrics && !result.metrics.empty) appendLiveEvidence(result, 'code');
+  }
+
+  function analyzeTextEvidence(text) {
+    const source = String(text || '');
+    const lower = source.toLowerCase();
+    const urgency = countPattern(lower, /\b(?:urgent|immediately|minutes|now|suspend|lock)\b/g);
+    const credential = countPattern(lower, /\b(?:password|credential|verify|confirm|account|secure link|payment)\b/g);
+    if (!source.trim()) return { ...modeCopy.text, score: 98.8, caption: 'Waiting for text evidence', metrics: { wordCount: 0 }, evidenceFingerprint: 'empty-text' };
+    const risk = clamp(urgency * 13 + credential * 8);
+    const score = clamp(98 - risk * 0.85);
+    const status = risk >= 55 ? 'danger' : risk >= 25 ? 'review' : 'safe';
+    return {
+      score: fixed(score),
+      status,
+      statusText: status === 'danger' ? 'HIGH RISK · PHISHING SIGNALS' : status === 'review' ? 'REVIEW · SOCIAL SIGNALS' : 'LOW RISK · AUTHENTICITY LIKELY',
+      caption: status === 'danger' ? 'Urgency and credential-harvesting language detected' : status === 'review' ? 'Some persuasive-risk signals need review' : 'No meaningful phishing intent detected',
+      confidence: source.length > 120 ? 'High' : 'Moderate',
+      confidencePercent: fixed(clamp(78 + Math.min(18, source.length / 30))),
+      signals: [
+        ['Authorship consistency', fixed(100 - risk * 0.35), risk > 35 ? 'review' : 'safe', 'fa-fingerprint'],
+        ['Urgency language', fixed(100 - urgency * 16), urgency ? 'review' : 'safe', 'fa-bolt'],
+        ['Credential harvesting', fixed(100 - credential * 12), credential ? 'review' : 'safe', 'fa-user-shield'],
+        ['AI generation markers', fixed(96 - Math.min(35, source.split(/\s+/).length / 5)), 'review', 'fa-wand-magic-sparkles']
+      ],
+      metrics: { wordCount: source.trim().split(/\s+/).length, urgencySignals: urgency, credentialSignals: credential, threatRisk: fixed(risk) },
+      evidenceFingerprint: `text:${textFingerprint(source)}`,
+      logSummary: `Text shield pass · ${source.trim().split(/\s+/).length} words · ${urgency + credential} intent signals`,
+      logDetail: `Urgency ${urgency} · credential terms ${credential} · risk ${fixed(risk, 2)}`
+    };
+  }
+
+  function scheduleTextAnalysis(immediate = false) {
+    window.clearTimeout(state.liveAnalysisTimer);
+    const run = () => {
+      if (state.mode !== 'text' || state.scanning) return;
+      const result = analyzeTextEvidence($('#textInput')?.value || '');
+      applyResult(result);
+      if (result.metrics && !result.metrics.empty) appendLiveEvidence(result, 'text');
+    };
+    if (immediate) run();
+    else state.liveAnalysisTimer = window.setTimeout(run, 260);
+  }
+
+  function detectMediaSignature(bytes) {
+    if (bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) return 'PNG';
+    if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return 'JPEG';
+    if (bytes.length >= 12 && String.fromCharCode(...bytes.slice(4, 8)) === 'ftyp') return 'MP4/ISO-BMFF';
+    if (bytes.length >= 4 && String.fromCharCode(...bytes.slice(0, 4)) === 'RIFF') return 'RIFF/WebM';
+    return 'Unknown';
+  }
+
+  function sampledByteEntropy(bytes) {
+    const maxSample = 120000;
+    const step = Math.max(1, Math.ceil(bytes.length / maxSample));
+    const sample = [];
+    for (let index = 0; index < bytes.length; index += step) sample.push(bytes[index]);
+    return normalizedEntropy(sample, 256);
+  }
+
+  async function sha256Hex(buffer) {
+    if (globalThis.crypto?.subtle) {
+      const digest = await globalThis.crypto.subtle.digest('SHA-256', buffer);
+      return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, '0')).join('');
+    }
+    return textFingerprint(Array.from(new Uint8Array(buffer)).join(','));
+  }
+
+  async function inspectMediaFile(file) {
+    const token = ++state.fileAnalysisToken;
+    try {
+      const buffer = await file.arrayBuffer();
+      if (token !== state.fileAnalysisToken) return;
+      const bytes = new Uint8Array(buffer);
+      const signature = detectMediaSignature(bytes);
+      const entropy = sampledByteEntropy(bytes);
+      const digest = await sha256Hex(buffer);
+      if (token !== state.fileAnalysisToken) return;
+      const suspiciousName = /deepfake|synthetic|generated|ai[-_ ]?render|fake|payload|obfus/i.test(file.name);
+      const signatureRisk = signature === 'Unknown' ? 27 : (file.type.startsWith('image/') && !['PNG', 'JPEG'].includes(signature)) || (file.type.startsWith('video/') && !['MP4/ISO-BMFF', 'RIFF/WebM'].includes(signature)) ? 22 : 0;
+      const entropyRisk = clamp((entropy - 88) * 4);
+      const generativeRisk = suspiciousName ? 86 : 0;
+      const metadataRisk = file.size < 1024 ? 16 : 0;
+      const risk = clamp(signatureRisk * 0.30 + entropyRisk * 0.16 + generativeRisk * 0.42 + metadataRisk * 0.12);
+      const status = risk >= 62 ? 'danger' : risk >= 28 ? 'review' : 'safe';
+      const result = {
+        score: fixed(100 - risk),
+        status,
+        statusText: status === 'danger' ? 'HIGH RISK · MEDIA ANOMALY' : status === 'review' ? 'REVIEW · MEDIA SIGNALS' : 'LOW RISK · MEDIA VERIFIED',
+        caption: status === 'danger' ? 'Integrity and generative-artifact signals require containment' : status === 'review' ? 'Media provenance requires analyst review' : 'Container and integrity signals appear consistent',
+        confidence: file.size > 10000 ? 'High' : 'Moderate',
+        confidencePercent: fixed(clamp(78 + Math.min(19, file.size / 50000))),
+        signals: [
+          ['Byte integrity', fixed(100 - entropyRisk), entropyRisk > 40 ? 'review' : 'safe', 'fa-fingerprint'],
+          ['Container signature', fixed(100 - signatureRisk), signatureRisk ? 'review' : 'safe', 'fa-file-shield'],
+          ['Threat indicators', fixed(100 - risk), risk > 35 ? 'review' : 'safe', 'fa-user-shield'],
+          ['Generative artifacts', fixed(100 - generativeRisk), generativeRisk ? 'review' : 'safe', 'fa-wand-magic-sparkles']
+        ],
+        metrics: { fileName: file.name, sizeBytes: file.size, mimeType: file.type || 'unknown', signature, byteEntropy: fixed(entropy), sha256: digest, suspiciousName, risk: fixed(risk) },
+        evidenceFingerprint: `file:${digest}`,
+        logSummary: `Media integrity pass · ${signature} · H ${fixed(entropy, 2)} · sha256 ${digest.slice(0, 12)}…`,
+        logDetail: `Container ${signatureRisk ? 'mismatch' : 'consistent'} · generative artifact index ${fixed(generativeRisk, 2)} · ${formatBytes(file.size)}`
+      };
+      state.fileAnalysis = result;
+      applyResult(result);
+      appendLiveEvidence(result, 'media');
+      showToast(`Integrity metrics ready · SHA-256 ${digest.slice(0, 10)}…`, 'fa-fingerprint');
+    } catch (error) {
+      showToast('Media analysis could not read this file safely.', 'fa-circle-exclamation');
+    }
+  }
+
+  function appendEvidenceEntry(time, markClass, icon, message, value) {
+    const logList = $('#logList');
+    if (!logList) return;
+    const entry = document.createElement('div');
+    entry.className = 'log-entry';
+    entry.innerHTML = `<time>${time}</time><span class="log-mark ${markClass}"><i class="fa-solid ${icon}"></i></span><span>${escapeHtml(message)}</span><b>${escapeHtml(value)}</b>`;
+    logList.prepend(entry);
+    while (logList.children.length > 4) logList.lastElementChild.remove();
+  }
+
+  function appendLiveEvidence(result, sourceType) {
+    if (!result || !result.evidenceFingerprint || state.lastEvidenceFingerprint === result.evidenceFingerprint) return;
+    state.lastEvidenceFingerprint = result.evidenceFingerprint;
+    const now = new Date().toLocaleTimeString([], { hour12: false });
+    const mark = result.status === 'danger' ? 'info' : result.status === 'review' ? 'violet' : 'success';
+    const icon = result.status === 'danger' ? 'fa-triangle-exclamation' : result.status === 'review' ? 'fa-eye' : 'fa-check';
+    appendEvidenceEntry(now, mark, icon, `Live ${sourceType} · ${result.logSummary}`, `${Number(result.score).toFixed(1)}%`);
+    if (result.logDetail) appendEvidenceEntry(now, 'info', 'fa-wave-square', result.logDetail, result.metrics?.sha256 ? result.metrics.sha256.slice(0, 12) : 'PASS');
+  }
+
   function bindScanControls() {
     $('#scanButton')?.addEventListener('click', runScan);
     $('#exportButton')?.addEventListener('click', exportReport);
@@ -356,6 +754,10 @@ if (next && !next.startsWith('https://trusted.example')) {
     if (state.mode === 'media' && !state.file && !state.demoMedia) {
       showToast('Add a media file or choose a signal preset to begin.', 'fa-cloud-arrow-up');
       $('#dropZone')?.focus();
+      return;
+    }
+    if (state.mode === 'media' && state.file && !state.fileAnalysis) {
+      showToast('Integrity metrics are still computing. Try the deep scan again in a moment.', 'fa-hourglass-half');
       return;
     }
 
@@ -408,6 +810,7 @@ if (next && !next.startsWith('https://trusted.example')) {
 
   function resultForCurrentEvidence() {
     if (state.mode === 'media') {
+      if (state.fileAnalysis) return state.fileAnalysis;
       if (state.demoMedia) {
         return {
           score: 18.7,
@@ -421,55 +824,19 @@ if (next && !next.startsWith('https://trusted.example')) {
             ['Temporal consistency', 24, 'review', 'fa-film'],
             ['Face geometry', 19, 'review', 'fa-user-shield'],
             ['Generative artifacts', 97, 'review', 'fa-wand-magic-sparkles']
-          ]
+          ],
+          metrics: { mediaPreset: true, generativeArtifactIndex: 97 },
+          evidenceFingerprint: 'demo-media'
         };
       }
-      const fileName = (state.file?.name || '').toLowerCase();
-      if (/deepfake|synthetic|generated|ai/.test(fileName)) {
-        return { ...modeCopy.media, score: 22.8, status: 'danger', statusText: 'HIGH RISK · SYNTHETIC MEDIA', caption: 'The file name and visual signals need review', confidence: 'High', confidencePercent: 94 };
-      }
-      return { ...modeCopy.media, score: 96.8, caption: 'No meaningful manipulation detected', confidencePercent: 95 };
+      return modeCopy.media;
     }
 
     if (state.mode === 'code') {
-      const code = ($('#codeInput')?.value || '').toLowerCase();
-      const suspicious = /(eval\s*\(|atob\s*\(|document\.cookie|innerhtml|window\.location|redirect|base64)/.test(code);
-      if (suspicious) {
-        return {
-          score: 44.2,
-          status: 'danger',
-          statusText: 'HIGH RISK · INJECTION PATH',
-          caption: 'Obfuscated redirect behavior requires containment',
-          confidence: 'Very high',
-          confidencePercent: 96,
-          signals: [
-            ['Source provenance', 52, 'review', 'fa-fingerprint'],
-            ['DOM behavior', 36, 'review', 'fa-code-branch'],
-            ['Injection indicators', 91, 'review', 'fa-user-shield'],
-            ['Obfuscation patterns', 96, 'review', 'fa-wand-magic-sparkles']
-          ]
-        };
-      }
-      return { ...modeCopy.code, score: 91.8, status: 'safe', statusText: 'LOW RISK · SOURCE VERIFIED', caption: 'DOM behavior is within expected bounds', confidence: 'High', confidencePercent: 93 };
+      return state.latestCodeAnalysis || analyzeCodeEvidence($('#codeInput')?.value || '');
     }
 
-    const text = ($('#textInput')?.value || '').toLowerCase();
-    const phishing = /(confirm|verify|account|password|credential|urgent|minutes|lock|secure link|gift|payment)/.test(text);
-    if (phishing) return modeCopy.text;
-    return {
-      score: 95.1,
-      status: 'safe',
-      statusText: 'LOW RISK · AUTHENTICITY LIKELY',
-      caption: 'No meaningful phishing intent detected',
-      confidence: 'High',
-      confidencePercent: 91,
-      signals: [
-        ['Authorship consistency', 95, 'safe', 'fa-fingerprint'],
-        ['Urgency language', 91, 'safe', 'fa-bolt'],
-        ['Credential harvesting', 98, 'safe', 'fa-user-shield'],
-        ['AI generation markers', 92, 'review', 'fa-wand-magic-sparkles']
-      ]
-    };
+    return analyzeTextEvidence($('#textInput')?.value || '');
   }
 
   function applyResult(result) {
@@ -561,13 +928,15 @@ if (next && !next.startsWith('https://trusted.example')) {
           setMode('code');
           $('#codeInput').value = codeSamples[sample];
           updateCounters();
-          showToast('Code evidence preset loaded.', 'fa-code');
+          scheduleCodeAnalysis(true);
+          showToast('Code evidence preset loaded. AST metrics recalculated.', 'fa-code');
         }
         if (sample === 'phishing' || sample === 'clean-text') {
           setMode('text');
           $('#textInput').value = textSamples[sample];
           updateCounters();
-          showToast('Text evidence preset loaded.', 'fa-message');
+          scheduleTextAnalysis(true);
+          showToast('Text evidence preset loaded. Threat metrics recalculated.', 'fa-message');
         }
       });
     });

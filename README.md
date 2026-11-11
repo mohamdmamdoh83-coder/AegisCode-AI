@@ -64,3 +64,4 @@ curl -X POST http://localhost:8000/api/v1/filter-threat \\
 - Animated deep-scan simulation with live verdict, score gauge, signal meters, and evidence log.
 - Device Guardian perimeter widget, activity chart, adaptive protection toggle, toast feedback, and local report export.
 - Tailwind CSS and Font Awesome loaded via CDN; app behavior is implemented in vanilla JavaScript.
+- Browser-side live inspection engine recalculates AST-like complexity, loop density, Shannon entropy, obfuscation, injection, file signature, and SHA-256 signals as evidence changes.
