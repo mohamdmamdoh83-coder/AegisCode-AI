@@ -238,7 +238,7 @@
 
   function toneForRisk(risk) {
     if (risk == null) return 'review';
-    if (risk >= 75) return 'review';
+    if (risk >= 75) return 'danger';
     if (risk >= 40) return 'review';
     return 'safe';
   }
@@ -477,6 +477,10 @@
     isPublicHttpsPage: isPublicHttpsPage,
     isSafeApiBase: isSafeApiBase,
     resolveBaseUrl: resolveBaseUrl,
+    isConfigured: function isConfigured(explicit) {
+      return Boolean(resolveBaseUrl(explicit));
+    },
+    toneForRisk: toneForRisk,
     classifyHttpError: classifyHttpError,
     mapInspectCode: mapInspectCode,
     mapFilterThreat: mapFilterThreat,
