@@ -249,8 +249,8 @@ if (next && !next.startsWith('https://trusted.example')) {
 
   function handleFile(file) {
     if (!file) return;
-    if (file.size > 250 * 1024 * 1024) {
-      showToast('That file is larger than the 250 MB evidence limit.', 'fa-circle-exclamation');
+    if (file.size > 25 * 1024 * 1024) {
+      showToast('That file is larger than the 25 MB evidence limit.', 'fa-circle-exclamation');
       return;
     }
 

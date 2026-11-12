@@ -25,6 +25,22 @@ python3 backend_core.py
 
 The API listens on `http://localhost:8000` by default.
 
+### API protections
+
+Both `backend_core.py` and standalone `threat_filter_core.py` apply environment-driven controls:
+
+- `CORS_ALLOW_ORIGINS` — comma-separated origins (default: local dashboard/API ports). Use `*` only without credentials.
+- `API_KEY`, `VERITAS_API_KEY`, or `AEGIS_API_KEY` — when set, require `X-API-Key` or `Authorization: Bearer`. `/health` remains unauthenticated.
+- `API_RATE_LIMIT` / `API_RATE_WINDOW_SECONDS` — per-client request budget (default 60/minute). `0` disables the limiter.
+- Uploads are rejected at **25 MB** before the file is fully decoded. The dashboard evidence limit matches this size.
+
+Standalone threat filtering:
+
+```bash
+python3 threat_filter_core.py
+curl http://localhost:8001/health
+```
+
 ### Inspect code
 
 ```bash
