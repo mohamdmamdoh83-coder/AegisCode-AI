@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hmac
 import json
+import logging
 import os
 import time
 from collections import defaultdict, deque
@@ -27,6 +28,8 @@ from typing import Any, Iterable, Optional
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 
+logger = logging.getLogger("veritas.api")
+
 DEFAULT_CORS_ORIGINS = (
     "http://localhost:4173",
     "http://127.0.0.1:4173",
@@ -35,12 +38,15 @@ DEFAULT_CORS_ORIGINS = (
     "http://localhost:8001",
     "http://127.0.0.1:8001",
 )
+PRODUCTION_CORS_ORIGINS = (
+    "https://mohamdmamdoh83-coder.github.io",
+)
 DEFAULT_RATE_LIMIT = 60
 DEFAULT_RATE_WINDOW_SECONDS = 60
 DEFAULT_MAX_REQUEST_BYTES = 26 * 1024 * 1024
 _MAX_TRACKED_CLIENTS = 10_000
-_AUTH_EXEMPT_PATHS = {"/health", "/docs", "/redoc", "/openapi.json"}
-_AUTH_EXEMPT_PREFIXES = ("/docs", "/redoc")
+_AUTH_EXEMPT_PATHS = {"/health"}
+_AUTH_EXEMPT_PREFIXES: tuple[str, ...] = ()
 
 _rate_hits: dict[str, deque[float]] = defaultdict(deque)
 _rate_lock = Lock()
@@ -51,6 +57,48 @@ def reset_security_state() -> None:
 
     with _rate_lock:
         _rate_hits.clear()
+
+
+def is_production() -> bool:
+    """True when ENVIRONMENT or VERITAS_ENV is production/prod."""
+
+    value = os.environ.get("ENVIRONMENT", os.environ.get("VERITAS_ENV", "development"))
+    return str(value).strip().lower() in {"production", "prod"}
+
+
+def configured_environment() -> str:
+    return "production" if is_production() else "development"
+
+
+def api_docs_enabled() -> bool:
+    """OpenAPI/Swagger are on in development and off in production unless overridden."""
+
+    raw = os.environ.get("ENABLE_API_DOCS")
+    if raw is not None and raw.strip():
+        return raw.strip().lower() in {"1", "true", "yes", "on"}
+    return not is_production()
+
+
+def fastapi_docs_kwargs() -> dict[str, Optional[str]]:
+    """Extra FastAPI() kwargs that hide /docs, /redoc, and /openapi.json."""
+
+    if api_docs_enabled():
+        return {}
+    return {"docs_url": None, "redoc_url": None, "openapi_url": None}
+
+
+def configure_logging() -> None:
+    """Idempotent process logging.  Never attaches handlers that dump request bodies."""
+
+    level_name = os.environ.get("LOG_LEVEL", "INFO").upper()
+    level = getattr(logging, level_name, logging.INFO)
+    root = logging.getLogger()
+    if not root.handlers:
+        logging.basicConfig(
+            level=level,
+            format="%(asctime)s %(levelname)s %(name)s %(message)s",
+        )
+    logging.getLogger("veritas").setLevel(level)
 
 
 def configured_api_key() -> str:
@@ -90,13 +138,16 @@ def configured_max_request_bytes() -> int:
 
 
 def configured_cors_origins() -> list[str]:
+    """Return an explicit origin allowlist.  Wildcard CORS is never enabled."""
+
     raw = os.environ.get("CORS_ALLOW_ORIGINS")
+    defaults = list(PRODUCTION_CORS_ORIGINS) if is_production() else list(DEFAULT_CORS_ORIGINS)
     if raw is None:
-        return list(DEFAULT_CORS_ORIGINS)
-    stripped = raw.strip()
-    if stripped == "*":
-        return ["*"]
-    return [origin.strip() for origin in stripped.split(",") if origin.strip()]
+        return defaults
+    origins = [origin.strip() for origin in raw.split(",") if origin.strip() and origin.strip() != "*"]
+    if "*" in {item.strip() for item in raw.split(",") if item.strip()}:
+        logger.warning("wildcard CORS origin rejected; using an explicit allowlist")
+    return origins or defaults
 
 
 def configured_cors_methods() -> list[str]:
@@ -320,6 +371,37 @@ class RateLimitMiddleware:
         await self.app(scope, receive, send_wrapper)
 
 
+class AccessLogMiddleware:
+    """Log method, path, status, and duration.  Never logs bodies, headers, or secrets."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        started = time.perf_counter()
+        status_box = {"status": 0}
+
+        async def send_wrapper(message: dict[str, Any]) -> None:
+            if message["type"] == "http.response.start":
+                status_box["status"] = int(message.get("status") or 0)
+            await send(message)
+
+        try:
+            await self.app(scope, receive, send_wrapper)
+        finally:
+            duration_ms = int((time.perf_counter() - started) * 1000)
+            logger.info(
+                "request method=%s path=%s status=%s duration_ms=%s",
+                scope.get("method") or "",
+                scope.get("path") or "",
+                status_box["status"],
+                duration_ms,
+            )
+
+
 class ApiKeyMiddleware:
     """Optional API-key gate.
 
@@ -366,11 +448,13 @@ def install_api_protections(app: Any, *, max_body_bytes: Optional[int] = None) -
 
     from fastapi.middleware.cors import CORSMiddleware
 
+    configure_logging()
     origins = configured_cors_origins()
-    allow_credentials = origins != ["*"]
+    allow_credentials = "*" not in origins
     app.add_middleware(ApiKeyMiddleware)
     app.add_middleware(RateLimitMiddleware)
     app.add_middleware(MaxBodySizeMiddleware, max_bytes=max_body_bytes)
+    app.add_middleware(AccessLogMiddleware)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=origins,
@@ -380,7 +464,25 @@ def install_api_protections(app: Any, *, max_body_bytes: Optional[int] = None) -
         expose_headers=["X-RateLimit-Limit", "X-RateLimit-Remaining", "Retry-After"],
         max_age=600,
     )
+    _install_safe_exception_handlers(app)
     try:
         app.state.api_protections_installed = True
     except Exception:
         pass
+
+
+def _install_safe_exception_handlers(app: Any) -> None:
+    """Return generic 500 bodies in production and never echo exception text."""
+
+    from fastapi.responses import JSONResponse
+    from starlette.requests import Request
+
+    @app.exception_handler(Exception)
+    async def unhandled_error(request: Request, exc: Exception) -> JSONResponse:
+        logger.exception(
+            "unhandled_error method=%s path=%s type=%s",
+            request.method,
+            request.url.path,
+            type(exc).__name__,
+        )
+        return JSONResponse({"detail": "internal error"}, status_code=500)

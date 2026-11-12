@@ -39,6 +39,7 @@ function testMapInspectCode() {
     analysis_logs: ['Trust engine verdict: SECURE at 88.50/100.']
   });
   assert.strictEqual(mapped.source, 'backend');
+  assert.strictEqual(mapped.isVerdict, true);
   assert.strictEqual(mapped.endpoint, '/api/v1/inspect-code');
   assert.strictEqual(mapped.score, 88.5);
   assert.strictEqual(mapped.status, 'safe');
@@ -93,11 +94,42 @@ function testErrorAndIdleAreNotBackendVerdicts() {
   const failed = api.errorResult(api.ApiError('unavailable', 'The analysis API is unavailable.', 0));
   assert.strictEqual(failed.source, 'error');
   assert.strictEqual(failed.backendError, true);
-  assert.strictEqual(failed.score, 0);
+  assert.strictEqual(failed.isVerdict, false);
+  assert.strictEqual(failed.score, null);
+  assert.strictEqual(failed.displayScore, '—');
   assert.strictEqual(failed.statusText, 'BACKEND UNAVAILABLE');
   const idle = api.idleResult();
   assert.strictEqual(idle.source, 'idle');
+  assert.strictEqual(idle.isVerdict, false);
+  assert.strictEqual(idle.score, null);
   assert.notStrictEqual(idle.source, 'backend');
+}
+
+function withPageLocation(location, fn) {
+  const previousWindow = global.window;
+  global.window = { location: location };
+  try {
+    return fn();
+  } finally {
+    if (previousWindow === undefined) delete global.window;
+    else global.window = previousWindow;
+  }
+}
+
+function testProductionPageNeverUsesLocalhost() {
+  withPageLocation({ protocol: 'https:', hostname: 'mohamdmamdoh83-coder.github.io', search: '' }, () => {
+    delete global.VERITAS_API_BASE;
+    assert.strictEqual(api.resolveBaseUrl(), '');
+    assert.strictEqual(api.resolveBaseUrl('http://localhost:8000'), '');
+    assert.strictEqual(api.resolveBaseUrl('https://veritas-api.example.com'), 'https://veritas-api.example.com');
+  });
+}
+
+function testMixedContentRejected() {
+  withPageLocation({ protocol: 'https:', hostname: 'mohamdmamdoh83-coder.github.io', search: '' }, () => {
+    assert.strictEqual(api.isSafeApiBase('http://example.com:8000'), false);
+    assert.strictEqual(api.isSafeApiBase('https://api.example.com'), true);
+  });
 }
 
 function testHealthSuccessShape() {
@@ -184,6 +216,8 @@ async function main() {
   testInvalidApiResponse();
   testErrorClassification();
   testErrorAndIdleAreNotBackendVerdicts();
+  testProductionPageNeverUsesLocalhost();
+  testMixedContentRejected();
   await testHealthSuccessShape();
   await testOfflineHealth();
   await testAuthFailureOnInspect();

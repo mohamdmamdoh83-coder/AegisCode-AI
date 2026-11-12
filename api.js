@@ -31,6 +31,7 @@
   'use strict';
 
   var DEFAULT_BASE_URL = 'http://localhost:8000';
+  var PAGES_ORIGIN = 'https://mohamdmamdoh83-coder.github.io';
   var MAX_FILE_BYTES = 25 * 1024 * 1024;
   var MAX_SOURCE_CHARS = 200000;
   var MAX_URL_CHARS = 8192;
@@ -47,10 +48,43 @@
     return String(value || '').replace(/\/+$/, '');
   }
 
-  function readMetaBase() {
+  function readMetaBase(name) {
     if (typeof document === 'undefined') return '';
-    var meta = document.querySelector('meta[name="veritas-api-base"]');
+    var meta = document.querySelector('meta[name="' + (name || 'veritas-api-base') + '"]');
     return meta && meta.getAttribute('content') ? meta.getAttribute('content').trim() : '';
+  }
+
+  function pageLocation() {
+    if (typeof window === 'undefined' || !window.location) return null;
+    return window.location;
+  }
+
+  function isLoopbackHost(hostname) {
+    var host = String(hostname || '').replace(/^\[|\]$/g, '').toLowerCase();
+    return host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '0.0.0.0';
+  }
+
+  function isPublicHttpsPage() {
+    var location = pageLocation();
+    if (!location) return false;
+    return location.protocol === 'https:' && !isLoopbackHost(location.hostname);
+  }
+
+  function parseAbsoluteUrl(value) {
+    try {
+      return new URL(String(value || '').trim());
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function isSafeApiBase(value) {
+    var parsed = parseAbsoluteUrl(value);
+    if (!parsed) return false;
+    if (isPublicHttpsPage()) {
+      return parsed.protocol === 'https:' && !isLoopbackHost(parsed.hostname);
+    }
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
   }
 
   function readQueryBase() {
@@ -71,17 +105,27 @@
     }
   }
 
-  function resolveBaseUrl(explicit) {
-    if (explicit && String(explicit).trim()) return trimSlash(explicit);
-    if (global.VERITAS_API_BASE && String(global.VERITAS_API_BASE).trim()) {
-      return trimSlash(global.VERITAS_API_BASE);
+  function firstSafeBase(values) {
+    for (var i = 0; i < values.length; i += 1) {
+      var candidate = values[i] == null ? '' : String(values[i]).trim();
+      if (!candidate) continue;
+      var trimmed = trimSlash(candidate);
+      if (isSafeApiBase(trimmed)) return trimmed;
     }
-    var fromQuery = readQueryBase();
-    if (fromQuery) return trimSlash(fromQuery);
-    var fromMeta = readMetaBase();
-    if (fromMeta) return trimSlash(fromMeta);
-    var stored = readStoredBase();
-    if (stored) return trimSlash(stored);
+    return '';
+  }
+
+  function resolveBaseUrl(explicit) {
+    var resolved = firstSafeBase([
+      explicit,
+      global.VERITAS_API_BASE,
+      readQueryBase(),
+      readMetaBase('veritas-api-base-production'),
+      readMetaBase('veritas-api-base'),
+      readStoredBase()
+    ]);
+    if (resolved) return resolved;
+    if (isPublicHttpsPage()) return '';
     return DEFAULT_BASE_URL;
   }
 
@@ -119,6 +163,13 @@
 
   async function request(path, options) {
     var baseUrl = resolveBaseUrl(options && options.baseUrl);
+    if (!baseUrl) {
+      throw ApiError(
+        'unconfigured',
+        'No HTTPS analysis API is configured for this dashboard.',
+        0
+      );
+    }
     var url = baseUrl + path;
     var controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
     var timer = null;
@@ -241,6 +292,7 @@
       analysisLogs: logs,
       evidenceFingerprint: 'inspect:' + (body.analysis_id || ''),
       source: 'backend',
+      isVerdict: true,
       endpoint: '/api/v1/inspect-code',
       raw: body
     };
@@ -288,6 +340,7 @@
         : [],
       evidenceFingerprint: 'filter:' + (body.analysis_id || ''),
       source: 'backend',
+      isVerdict: true,
       endpoint: '/api/v1/filter-threat',
       raw: body
     };
@@ -298,6 +351,7 @@
     var message = error && error.message ? error.message : 'The analysis API request failed.';
     var statusText = {
       unavailable: 'BACKEND UNAVAILABLE',
+      unconfigured: 'API NOT CONFIGURED',
       auth: 'AUTHENTICATION REQUIRED',
       rate_limited: 'RATE LIMITED',
       invalid_input: 'INVALID INPUT',
@@ -306,7 +360,8 @@
       failed: 'REQUEST FAILED'
     }[code] || 'REQUEST FAILED';
     return {
-      score: 0,
+      score: null,
+      displayScore: '—',
       status: 'danger',
       statusText: statusText,
       caption: message,
@@ -322,13 +377,15 @@
       analysisLogs: [message],
       evidenceFingerprint: 'error:' + code,
       source: 'error',
+      isVerdict: false,
       backendError: true
     };
   }
 
   function idleResult(caption) {
     return {
-      score: 0,
+      score: null,
+      displayScore: '—',
       status: 'review',
       statusText: 'AWAITING INSPECTION',
       caption: caption || 'No backend verdict yet. Run a deep scan against the analysis API.',
@@ -343,7 +400,8 @@
       metrics: { idle: true },
       analysisLogs: [],
       evidenceFingerprint: 'idle',
-      source: 'idle'
+      source: 'idle',
+      isVerdict: false
     };
   }
 
@@ -412,9 +470,12 @@
 
   var VeritasAPI = {
     DEFAULT_BASE_URL: DEFAULT_BASE_URL,
+    PAGES_ORIGIN: PAGES_ORIGIN,
     MAX_FILE_BYTES: MAX_FILE_BYTES,
     MAX_SOURCE_CHARS: MAX_SOURCE_CHARS,
     ApiError: ApiError,
+    isPublicHttpsPage: isPublicHttpsPage,
+    isSafeApiBase: isSafeApiBase,
     resolveBaseUrl: resolveBaseUrl,
     classifyHttpError: classifyHttpError,
     mapInspectCode: mapInspectCode,

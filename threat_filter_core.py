@@ -34,7 +34,7 @@ import numpy as np
 from fastapi import APIRouter, FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field, ValidationError
 
-from api_security import install_api_protections
+from api_security import configured_environment, fastapi_docs_kwargs, install_api_protections
 
 
 MAX_FILE_BYTES = 25 * 1024 * 1024
@@ -1580,6 +1580,7 @@ app = FastAPI(
     title="Veritas Inspector Threat Filtering Core",
     version="1.0.0",
     description="Read-only file, URL, code, and process threat filtering service.",
+    **fastapi_docs_kwargs(),
 )
 app.include_router(threat_router)
 
@@ -1588,13 +1589,32 @@ app.include_router(threat_router)
 def threat_filter_health() -> dict[str, str]:
     """Liveness endpoint for the standalone threat-filter service."""
 
-    return {"status": "ok", "service": "veritas-inspector-threat-filter"}
+    return {
+        "status": "ok",
+        "service": "veritas-inspector-threat-filter",
+        "environment": configured_environment(),
+    }
 
 
 install_api_protections(app, max_body_bytes=MAX_FILE_BYTES + 1_048_576)
 
 
 if __name__ == "__main__":
+    import os
+
     import uvicorn
 
-    uvicorn.run("threat_filter_core:app", host="0.0.0.0", port=8001, reload=False)
+    from api_security import configure_logging, is_production
+
+    configure_logging()
+    port = int(os.environ.get("PORT", "8001"))
+    host = os.environ.get("HOST", "0.0.0.0")
+    trust_proxy = os.environ.get("TRUST_PROXY_HEADERS", "").strip().lower() in {"1", "true", "yes"}
+    uvicorn.run(
+        "threat_filter_core:app",
+        host=host,
+        port=port,
+        reload=False,
+        proxy_headers=trust_proxy or is_production(),
+        forwarded_allow_ips="*" if (trust_proxy or is_production()) else None,
+    )
