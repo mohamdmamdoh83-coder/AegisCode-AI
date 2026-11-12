@@ -12,6 +12,8 @@ python3 -m http.server 4173 --bind 0.0.0.0
 
 Then open `http://localhost:4173` in a browser.
 
+The dashboard calls the analysis API at `http://localhost:8000` by default (`GET /health`, `POST /api/v1/inspect-code`, `POST /api/v1/filter-threat`). Override the base URL with the `veritas-api-base` meta tag, `?apiBase=`, `localStorage.veritas.apiBaseUrl`, or `window.VERITAS_API_BASE`. The browser client never sends or stores API keys; if the backend requires a key, the UI reports authentication required instead of a fake verdict.
+
 ## Mathematical analysis backend
 
 `backend_core.py` contains the FastAPI and NumPy inspection service. It parses Python with the standard-library AST and JavaScript with a dependency-free structural lexer, then computes complexity, loop density, entropy, obfuscation, injection, and deterministic trust metrics.
