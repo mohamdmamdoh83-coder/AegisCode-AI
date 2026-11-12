@@ -20,7 +20,8 @@ def test_combined_health(client: TestClient) -> None:
 def test_standalone_threat_filter_health(threat_client: TestClient) -> None:
     response = threat_client.get("/health")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "service": "veritas-inspector-threat-filter"}
+    assert response.json()["status"] == "ok"
+    assert response.json()["service"] == "veritas-inspector-threat-filter"
 
 
 def test_cors_allows_configured_localhost_origin(client: TestClient) -> None:

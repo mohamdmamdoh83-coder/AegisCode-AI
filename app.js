@@ -387,6 +387,7 @@ if (next && !next.startsWith('https://trusted.example')) {
     const code = error && error.code ? error.code : 'unavailable';
     const mapped = {
       unavailable: ['unavailable', 'BACKEND UNAVAILABLE', 'NO API VERDICT'],
+      unconfigured: ['unavailable', 'API NOT CONFIGURED', 'NO HTTPS BACKEND'],
       auth: ['auth', 'AUTH REQUIRED', 'API KEY NOT IN BROWSER'],
       rate_limited: ['rate_limited', 'RATE LIMITED', 'TRY AGAIN'],
       failed: ['failed', 'REQUEST FAILED', 'SEE VERDICT STREAM'],
@@ -512,9 +513,15 @@ if (next && !next.startsWith('https://trusted.example')) {
     if (!result) return;
     if (!Array.isArray(result.signals) || result.signals.length < 4) return;
     state.lastResult = result;
+    const isVerdict = result.source === 'backend' && result.score != null && Number.isFinite(Number(result.score));
     const gauge = $('#scoreGauge');
-    if (gauge) gauge.style.setProperty('--score', result.score);
-    if ($('#scoreValue')) $('#scoreValue').textContent = Number(result.score).toFixed(1);
+    if (gauge) {
+      gauge.style.setProperty('--score', isVerdict ? result.score : 0);
+      gauge.setAttribute('data-verdict', isVerdict ? 'backend' : 'none');
+    }
+    if ($('#scoreValue')) $('#scoreValue').textContent = isVerdict ? Number(result.score).toFixed(1) : '—';
+    if ($('#scoreUnit')) $('#scoreUnit').hidden = !isVerdict;
+    if ($('#scoreKind')) $('#scoreKind').textContent = isVerdict ? 'TRUST SCORE' : 'NO VERDICT';
     if ($('#scoreCaption')) $('#scoreCaption').textContent = result.caption;
     const captionIcon = $('.score-caption i');
     if (captionIcon) {
@@ -561,7 +568,10 @@ if (next && !next.startsWith('https://trusted.example')) {
     const mark = result.status === 'danger' ? 'info' : result.status === 'review' ? 'violet' : 'success';
     const first = document.createElement('div');
     first.className = 'log-entry';
-    first.innerHTML = `<time>${time}</time><span class="log-mark ${mark}"><i class="fa-solid ${icon}"></i></span><span>${escapeHtml(result.caption)}</span><b>${Number(result.score).toFixed(1)}%</b>`;
+    const scoreLabel = result.source === 'backend' && result.score != null
+      ? `${Number(result.score).toFixed(1)}%`
+      : (result.source === 'error' ? 'NO VERDICT' : 'IDLE');
+    first.innerHTML = `<time>${time}</time><span class="log-mark ${mark}"><i class="fa-solid ${icon}"></i></span><span>${escapeHtml(result.caption)}</span><b>${escapeHtml(scoreLabel)}</b>`;
     logList.prepend(first);
     while (logList.children.length > 4) logList.lastElementChild.remove();
   }
@@ -792,7 +802,7 @@ if (next && !next.startsWith('https://trusted.example')) {
       `Generated: ${new Date().toISOString()}`,
       `Inspection mode: ${state.mode.toUpperCase()}`,
       `Result origin: ${origin}`,
-      `Trust score: ${Number(result.score).toFixed(1)} / 100`,
+      `Trust score: ${result.source === 'backend' && result.score != null ? `${Number(result.score).toFixed(1)} / 100` : 'n/a (no backend verdict)'}`,
       `Verdict: ${result.statusText}`,
       `Confidence: ${result.confidence} (${result.confidencePercent}%)`,
       result.metrics?.analysisId ? `Analysis id: ${result.metrics.analysisId}` : '',

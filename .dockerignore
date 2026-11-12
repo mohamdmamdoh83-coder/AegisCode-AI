@@ -1,0 +1,15 @@
+.git
+.github
+.pytest_cache
+__pycache__
+.venv
+venv
+.env
+.env.*
+tests
+*.md
+index.html
+app.js
+api.js
+styles.css
+.DS_Store

@@ -12,7 +12,9 @@ python3 -m http.server 4173 --bind 0.0.0.0
 
 Then open `http://localhost:4173` in a browser.
 
-The dashboard calls the analysis API at `http://localhost:8000` by default (`GET /health`, `POST /api/v1/inspect-code`, `POST /api/v1/filter-threat`). Override the base URL with the `veritas-api-base` meta tag, `?apiBase=`, `localStorage.veritas.apiBaseUrl`, or `window.VERITAS_API_BASE`. The browser client never sends or stores API keys; if the backend requires a key, the UI reports authentication required instead of a fake verdict.
+The dashboard calls the analysis API at `http://localhost:8000` by default (`GET /health`, `POST /api/v1/inspect-code`, `POST /api/v1/filter-threat`). Override the local base URL with the `veritas-api-base` meta tag, `?apiBase=`, `localStorage.veritas.apiBaseUrl`, or `window.VERITAS_API_BASE`. On GitHub Pages (or any public HTTPS origin) the client never uses localhost or mixed `http://` API URLs. Set `veritas-api-base-production` to a future HTTPS API origin after that host is approved. The browser client never sends or stores API keys; if the backend requires a key, the UI reports authentication required instead of a fake verdict. Failed or unconfigured API calls show **NO VERDICT**, not a numeric mock score.
+
+The analysis API is **not hosted** in this repository's GitHub Pages deployment. See `PHASE_2B_DEPLOYMENT.md` before any public backend is created. Do not deploy it without approval.
 
 ## Mathematical analysis backend
 
@@ -31,10 +33,13 @@ The API listens on `http://localhost:8000` by default.
 
 Both `backend_core.py` and standalone `threat_filter_core.py` apply environment-driven controls:
 
-- `CORS_ALLOW_ORIGINS` — comma-separated origins (default: local dashboard/API ports). Use `*` only without credentials.
-- `API_KEY`, `VERITAS_API_KEY`, or `AEGIS_API_KEY` — when set, require `X-API-Key` or `Authorization: Bearer`. `/health` remains unauthenticated.
-- `API_RATE_LIMIT` / `API_RATE_WINDOW_SECONDS` — per-client request budget (default 60/minute). `0` disables the limiter.
+- `CORS_ALLOW_ORIGINS` — comma-separated origins. Wildcard `*` is rejected. Development defaults to local dashboard/API ports. Production defaults to `https://mohamdmamdoh83-coder.github.io`.
+- `ENVIRONMENT=production` — disables `/docs`, `/redoc`, and `/openapi.json` unless `ENABLE_API_DOCS=true`.
+- `API_KEY`, `VERITAS_API_KEY`, or `AEGIS_API_KEY` — when set, require `X-API-Key` or `Authorization: Bearer`. `/health` remains unauthenticated. **Do not put this key in browser JavaScript.** Leave it unset for a public GitHub Pages frontend.
+- `API_RATE_LIMIT` / `API_RATE_WINDOW_SECONDS` — per-client request budget (default 60/minute). `0` disables the limiter. Use one uvicorn worker so the in-process limiter is not split.
+- `TRUST_PROXY_HEADERS=true` — only behind Fly/Render/Cloud Run so rate limits use `X-Forwarded-For`.
 - Uploads are rejected at **25 MB** before the file is fully decoded. The dashboard evidence limit matches this size.
+- Production start: `uvicorn backend_core:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips='*' --workers 1`. See `Dockerfile` and `.env.example`.
 
 Standalone threat filtering:
 
@@ -79,8 +84,7 @@ curl -X POST http://localhost:8000/api/v1/filter-threat \\
 - Media forensics workspace with image/video drag-and-drop previews.
 - DOM / code inspector with source and URL presets.
 - Text shield for phishing and authorship signals.
-- Animated deep-scan simulation with live verdict, score gauge, signal meters, and evidence log.
+- Deep scan against the local analysis API with live verdict, score gauge, signal meters, and evidence log. Idle and error states are labeled as not backend verdicts.
 - Device Guardian perimeter widget, activity chart, adaptive protection toggle, toast feedback, and local report export.
 - Tailwind CSS and Font Awesome loaded via CDN; app behavior is implemented in vanilla JavaScript.
-- Browser-side live inspection engine recalculates AST-like complexity, loop density, Shannon entropy, obfuscation, injection, file signature, and SHA-256 signals as evidence changes.
-- Real-time cyberpunk threat alerts raise an active banner, animated notification popups, visual sound-wave indicators, optional alert tones, and dismissal/review controls for malicious or suspicious findings.
+- Real-time cyberpunk threat alerts raise an active banner, animated notification popups, visual sound-wave indicators, optional alert tones, and dismissal/review controls for malicious or suspicious **backend** findings.

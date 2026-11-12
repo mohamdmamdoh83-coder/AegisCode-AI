@@ -37,7 +37,7 @@ import numpy as np
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
-from api_security import install_api_protections
+from api_security import configured_environment, fastapi_docs_kwargs, install_api_protections
 
 
 MAX_SOURCE_CHARS = 200_000
@@ -1192,6 +1192,7 @@ app = FastAPI(
     title="Veritas Inspector Analysis Core",
     version="1.0.0",
     description="Deterministic AST and entropy-based code inspection service.",
+    **fastapi_docs_kwargs(),
 )
 # The combined service also hosts /api/v1/filter-threat, so the body limit must
 # cover file uploads rather than source-only inspection.
@@ -1202,7 +1203,11 @@ install_api_protections(app, max_body_bytes=26 * 1024 * 1024)
 def health() -> dict[str, str]:
     """Small liveness endpoint for orchestration and smoke checks."""
 
-    return {"status": "ok", "service": "veritas-inspector-analysis-core"}
+    return {
+        "status": "ok",
+        "service": "veritas-inspector-analysis-core",
+        "environment": configured_environment(),
+    }
 
 
 @app.post("/api/v1/inspect-code")
@@ -1235,6 +1240,21 @@ app.include_router(threat_router)
 
 
 if __name__ == "__main__":
+    import os
+
     import uvicorn
 
-    uvicorn.run("backend_core:app", host="0.0.0.0", port=8000, reload=False)
+    from api_security import configure_logging, is_production
+
+    configure_logging()
+    port = int(os.environ.get("PORT", "8000"))
+    host = os.environ.get("HOST", "0.0.0.0")
+    trust_proxy = os.environ.get("TRUST_PROXY_HEADERS", "").strip().lower() in {"1", "true", "yes"}
+    uvicorn.run(
+        "backend_core:app",
+        host=host,
+        port=port,
+        reload=False,
+        proxy_headers=trust_proxy or is_production(),
+        forwarded_allow_ips="*" if (trust_proxy or is_production()) else None,
+    )

@@ -25,6 +25,7 @@ def test_frontend_loads_api_client_without_secrets() -> None:
 
 def test_frontend_does_not_present_mock_verdicts() -> None:
     app_js = (ROOT / "app.js").read_text(encoding="utf-8")
+    html = (ROOT / "index.html").read_text(encoding="utf-8")
     assert "modeCopy" not in app_js
     assert "analyzeCodeEvidence" not in app_js
     assert "inspectMediaFile" not in app_js
@@ -34,6 +35,17 @@ def test_frontend_does_not_present_mock_verdicts() -> None:
     assert "VeritasAPI" in app_js
     assert "errorResult" in app_js
     assert "idleResult" in app_js
+    log_start = html.find('id="logList"')
+    assert log_start != -1
+    log_html = html[log_start : log_start + 800]
+    assert "98.4%" not in log_html
+    assert "Cross-engine consensus reached" not in log_html
+    assert "Compared against 2.84M forensic signals" not in html[html.find('id="logList"') :]
+    assert "No backend verdict recorded" in log_html
+    assert 'id="scoreValue">—</span>' in html
+    assert "LOW RISK · VERIFIED" not in html
+    assert "AWAITING INSPECTION" in html
+    assert 'name="veritas-api-base-production"' in html
 
 
 def test_health_and_inspect_and_filter_endpoints(client: TestClient) -> None:

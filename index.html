@@ -9,6 +9,7 @@
       content="Veritas Inspector is an AI security command center for detecting deepfakes, malicious code, and social-engineering attacks."
     />
     <meta name="veritas-api-base" content="http://localhost:8000" />
+    <meta name="veritas-api-base-production" content="" />
     <title>Veritas Inspector — AI Security Command Center</title>
 
     <script src="https://cdn.tailwindcss.com"></script>
@@ -253,7 +254,7 @@ observer.observe(document.body, { subtree: true, attributes: true });</textarea>
               </div>
 
               <div class="inspector-actions">
-                <div class="privacy-note"><span class="privacy-icon"><i class="fa-solid fa-fingerprint"></i></span><span><b>Private by design</b><small>Evidence is sent to the local analysis API and is not used to train models.</small></span></div>
+                <div class="privacy-note"><span class="privacy-icon"><i class="fa-solid fa-fingerprint"></i></span><span><b>Private by design</b><small>Evidence is sent to the configured analysis API and is not used to train models.</small></span></div>
                 <button class="button button-primary scan-button" id="scanButton" type="button"><i class="fa-solid fa-radar"></i><span>Run deep scan</span><i class="fa-solid fa-arrow-right button-arrow"></i></button>
               </div>
             </div>
@@ -261,32 +262,30 @@ observer.observe(document.body, { subtree: true, attributes: true });</textarea>
             <div class="glass-panel results-panel" id="results">
               <div class="results-header">
                 <div><div class="panel-kicker"><span class="live-dot"></span> VERDICT STREAM</div><h3>Analysis results</h3></div>
-                <div class="result-status safe" id="resultStatus"><span class="status-pulse"></span><span id="resultStatusText">LOW RISK · VERIFIED</span></div>
+                <div class="result-status review" id="resultStatus"><span class="status-pulse"></span><span id="resultStatusText">AWAITING INSPECTION</span></div>
               </div>
               <div class="results-grid">
                 <div class="score-column">
-                  <div class="score-gauge" id="scoreGauge" style="--score: 98.4">
-                    <div class="gauge-inner"><span class="score-value" id="scoreValue">98.4</span><span class="score-unit">/ 100</span><small>TRUST SCORE</small></div>
+                  <div class="score-gauge" id="scoreGauge" style="--score: 0" data-verdict="none">
+                    <div class="gauge-inner"><span class="score-value" id="scoreValue">—</span><span class="score-unit" id="scoreUnit" hidden>/ 100</span><small id="scoreKind">NO VERDICT</small></div>
                   </div>
-                  <div class="score-caption"><i class="fa-solid fa-circle-check"></i><span id="scoreCaption">Evidence appears authentic</span></div>
+                  <div class="score-caption"><i class="fa-solid fa-circle-exclamation"></i><span id="scoreCaption">No backend verdict yet. Run a deep scan against the analysis API.</span></div>
                 </div>
                 <div class="signals-column">
                   <div class="signals-heading"><span>Threat signal breakdown</span><span class="signals-legend"><i class="legend-safe"></i> Safe <i class="legend-review"></i> Review</span></div>
                   <div class="signal-list" id="signalList">
-                    <div class="signal-row"><div class="signal-label"><span class="signal-icon safe"><i class="fa-solid fa-fingerprint"></i></span><span>Authenticity markers</span><b>99%</b></div><div class="meter"><span style="width: 99%"></span></div></div>
-                    <div class="signal-row"><div class="signal-label"><span class="signal-icon safe"><i class="fa-solid fa-code-branch"></i></span><span>Behavioral consistency</span><b>97%</b></div><div class="meter"><span style="width: 97%"></span></div></div>
-                    <div class="signal-row"><div class="signal-label"><span class="signal-icon safe"><i class="fa-solid fa-user-shield"></i></span><span>Threat indicators</span><b>96%</b></div><div class="meter"><span style="width: 96%"></span></div></div>
-                    <div class="signal-row"><div class="signal-label"><span class="signal-icon review"><i class="fa-solid fa-wand-magic-sparkles"></i></span><span>Generative artifacts</span><b>94%</b></div><div class="meter"><span class="review-meter" style="width: 94%"></span></div></div>
+                    <div class="signal-row"><div class="signal-label"><span class="signal-icon safe"><i class="fa-solid fa-user-shield"></i></span><span>Injection risk</span><b>0%</b></div><div class="meter"><span style="width: 0%"></span></div></div>
+                    <div class="signal-row"><div class="signal-label"><span class="signal-icon safe"><i class="fa-solid fa-wand-magic-sparkles"></i></span><span>Obfuscation risk</span><b>0%</b></div><div class="meter"><span style="width: 0%"></span></div></div>
+                    <div class="signal-row"><div class="signal-label"><span class="signal-icon safe"><i class="fa-solid fa-wave-square"></i></span><span>Entropy risk</span><b>0%</b></div><div class="meter"><span style="width: 0%"></span></div></div>
+                    <div class="signal-row"><div class="signal-label"><span class="signal-icon safe"><i class="fa-solid fa-code"></i></span><span>Syntax risk</span><b>0%</b></div><div class="meter"><span style="width: 0%"></span></div></div>
                   </div>
-                  <div class="confidence-line"><span>Confidence <b id="confidenceValue">High</b></span><span class="confidence-track"><i style="width: 92%" id="confidenceTrack"></i></span><span id="confidencePercent">92%</span></div>
+                  <div class="confidence-line"><span>Confidence <b id="confidenceValue">None</b></span><span class="confidence-track"><i style="width: 0%" id="confidenceTrack"></i></span><span id="confidencePercent">0%</span></div>
                 </div>
               </div>
               <div class="results-log">
                 <div class="log-heading"><span><i class="fa-solid fa-terminal"></i> Evidence log</span><button type="button" class="export-button" id="exportButton"><i class="fa-solid fa-arrow-up-from-bracket"></i> Export report</button></div>
                 <div class="log-list" id="logList" aria-live="polite">
-                  <div class="log-entry"><time>14:32:08</time><span class="log-mark success"><i class="fa-solid fa-check"></i></span><span>Cross-engine consensus reached</span><b>98.4%</b></div>
-                  <div class="log-entry"><time>14:32:07</time><span class="log-mark info"><i class="fa-solid fa-wave-square"></i></span><span>Compared against 2.84M forensic signals</span><b>1.8s</b></div>
-                  <div class="log-entry"><time>14:32:06</time><span class="log-mark violet"><i class="fa-solid fa-fingerprint"></i></span><span>Content provenance chain verified</span><b>PASS</b></div>
+                  <div class="log-entry"><time>--</time><span class="log-mark info"><i class="fa-solid fa-circle-pause"></i></span><span>No backend verdict recorded</span><b>IDLE</b></div>
                 </div>
               </div>
             </div>

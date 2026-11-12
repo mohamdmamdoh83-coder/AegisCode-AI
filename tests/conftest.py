@@ -25,6 +25,11 @@ def _isolate_security_state(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("API_RATE_LIMIT", raising=False)
     monkeypatch.delenv("API_RATE_WINDOW_SECONDS", raising=False)
     monkeypatch.delenv("TRUST_PROXY_HEADERS", raising=False)
+    monkeypatch.delenv("ENVIRONMENT", raising=False)
+    monkeypatch.delenv("VERITAS_ENV", raising=False)
+    monkeypatch.delenv("ENABLE_API_DOCS", raising=False)
+    monkeypatch.delenv("CORS_ALLOW_ORIGINS", raising=False)
+    monkeypatch.delenv("LOG_LEVEL", raising=False)
     reset_security_state()
     yield
     reset_security_state()
