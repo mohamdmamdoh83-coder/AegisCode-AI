@@ -26,7 +26,8 @@
     healthTimer: null,
     inspectToken: 0,
     connection: 'connecting',
-    lastResult: null
+    lastResult: null,
+    previewObjectUrl: null
   };
 
   const api = () => {
@@ -56,8 +57,14 @@ if (next && !next.startsWith('https://trusted.example')) {
   };
 
   const textSamples = {
-    phishing: 'Your account has been selected for an exclusive security upgrade. Confirm your identity within 30 minutes to avoid a temporary lock. Use the secure link below to continue.',
-    'clean-text': 'The quarterly report outlines a measured increase in regional adoption, supported by transparent methodology and interviews with three independent researchers.'
+    phishing: {
+      url: 'https://account-verification.example.com/session/continue',
+      body: 'Your account has been selected for an exclusive security upgrade. Confirm your identity within 30 minutes to avoid a temporary lock. Use the secure link below to continue.'
+    },
+    'clean-text': {
+      url: '',
+      body: 'The quarterly report outlines a measured increase in regional adoption, supported by transparent methodology and interviews with three independent researchers.'
+    }
   };
 
   function init() {
@@ -72,8 +79,7 @@ if (next && !next.startsWith('https://trusted.example')) {
     updateCounters();
     setActiveNav('overview');
     applyResult(api().idleResult(), { silent: true });
-    pollBackendHealth();
-    state.healthTimer = window.setInterval(pollBackendHealth, 15000);
+    startHealthPolling();
   }
 
   function bindNavigation() {
@@ -213,6 +219,7 @@ if (next && !next.startsWith('https://trusted.example')) {
       state.codeFile = file;
       state.file = null;
       state.fileAnalysis = null;
+      replacePreviewObjectUrl(null);
       file.text().then((source) => {
         setMode('code');
         const input = $('#codeInput');
@@ -239,6 +246,14 @@ if (next && !next.startsWith('https://trusted.example')) {
     showToast('Evidence loaded. Run a deep scan to send it to the analysis API.', 'fa-circle-check');
   }
 
+  function replacePreviewObjectUrl(next) {
+    const previous = state.previewObjectUrl;
+    state.previewObjectUrl = next || null;
+    if (previous && previous !== state.previewObjectUrl) {
+      URL.revokeObjectURL(previous);
+    }
+  }
+
   function renderMediaPreview(file) {
     const dropZone = $('#dropZone');
     const preview = $('#mediaPreview');
@@ -247,11 +262,13 @@ if (next && !next.startsWith('https://trusted.example')) {
     dropZone.hidden = true;
     preview.hidden = false;
     thumb.replaceChildren();
+    const objectUrl = URL.createObjectURL(file);
+    replacePreviewObjectUrl(objectUrl);
 
     if (file.type.startsWith('image/')) {
       const image = document.createElement('img');
       image.alt = 'Selected evidence preview';
-      image.src = URL.createObjectURL(file);
+      image.src = objectUrl;
       thumb.appendChild(image);
     } else {
       const video = document.createElement('video');
@@ -259,7 +276,7 @@ if (next && !next.startsWith('https://trusted.example')) {
       video.autoplay = true;
       video.loop = true;
       video.playsInline = true;
-      video.src = URL.createObjectURL(file);
+      video.src = objectUrl;
       thumb.appendChild(video);
     }
     $('#previewName').textContent = file.name;
@@ -279,6 +296,7 @@ if (next && !next.startsWith('https://trusted.example')) {
     dropZone.hidden = true;
     preview.hidden = false;
     thumb.replaceChildren();
+    replacePreviewObjectUrl(null);
     const icon = document.createElement('i');
     icon.className = kind === 'video' ? 'fa-solid fa-film' : 'fa-solid fa-user-astronaut';
     thumb.appendChild(icon);
@@ -303,6 +321,7 @@ if (next && !next.startsWith('https://trusted.example')) {
     const dropZone = $('#dropZone');
     const thumb = $('#previewThumb');
     if (thumb) thumb.replaceChildren();
+    replacePreviewObjectUrl(null);
     if (preview) preview.hidden = true;
     if (dropZone) dropZone.hidden = false;
   }
@@ -323,9 +342,11 @@ if (next && !next.startsWith('https://trusted.example')) {
     });
     $('#clearTextButton')?.addEventListener('click', () => {
       const textInput = $('#textInput');
+      const urlInput = $('#textUrlInput');
       if (textInput) textInput.value = '';
+      if (urlInput) urlInput.value = '';
       updateCounters();
-      showToast('Evidence text cleared.', 'fa-eraser');
+      showToast('Evidence text cleared. URL scan is disabled until a URL is supplied.', 'fa-eraser');
     });
     $('#pasteButton')?.addEventListener('click', async () => {
       try {
@@ -374,7 +395,28 @@ if (next && !next.startsWith('https://trusted.example')) {
     if ($('#heroApiStatusDetail')) $('#heroApiStatusDetail').textContent = detail;
   }
 
+  function startHealthPolling() {
+    if (state.healthTimer) {
+      window.clearInterval(state.healthTimer);
+      state.healthTimer = null;
+    }
+    if (!api().isConfigured()) {
+      setBackendStatus('unavailable', 'API NOT CONFIGURED', 'NO HTTPS BACKEND');
+      return;
+    }
+    pollBackendHealth();
+    state.healthTimer = window.setInterval(pollBackendHealth, 15000);
+  }
+
   async function pollBackendHealth() {
+    if (!api().isConfigured()) {
+      if (state.healthTimer) {
+        window.clearInterval(state.healthTimer);
+        state.healthTimer = null;
+      }
+      setBackendStatus('unavailable', 'API NOT CONFIGURED', 'NO HTTPS BACKEND');
+      return;
+    }
     if (state.connection === 'connecting') {
       setBackendStatus('connecting', 'CONNECTING', 'CHECKING API');
     }
@@ -444,15 +486,22 @@ if (next && !next.startsWith('https://trusted.example')) {
     }
 
     const text = $('#textInput')?.value || '';
-    const urls = extractUrls(text);
-    if (!urls.length) {
+    const url = readInspectionUrl();
+    if (!url) {
       throw client.ApiError(
         'invalid_input',
-        'The analysis API does not inspect free-form text for authorship. Paste a URL to run /api/v1/filter-threat.',
+        'The analysis API does not inspect free-form text for authorship. Provide a URL to run /api/v1/filter-threat.',
         0
       );
     }
-    return client.filterThreatUrl(urls[0], { networkPayload: text });
+    return client.filterThreatUrl(url, { networkPayload: text });
+  }
+
+  function readInspectionUrl() {
+    const field = String($('#textUrlInput')?.value || '').trim();
+    if (field) return field;
+    const urls = extractUrls($('#textInput')?.value || '');
+    return urls[0] || '';
   }
 
   function bindScanControls() {
@@ -567,6 +616,7 @@ if (next && !next.startsWith('https://trusted.example')) {
       }
       if (meter) {
         meter.classList.toggle('review-meter', tone === 'review');
+        meter.classList.toggle('danger-meter', tone === 'danger');
         meter.style.width = `${value}%`;
       }
     });
@@ -624,9 +674,8 @@ if (next && !next.startsWith('https://trusted.example')) {
     const metrics = result.metrics || {};
     const injection = Number(metrics.injectionIndex ?? metrics.threatBreakdown?.injectionRisk ?? 0);
     const obfuscation = Number(metrics.obfuscationIndex ?? metrics.threatBreakdown?.obfuscationRisk ?? 0);
-    const generative = Number(metrics.generativeArtifactIndex ?? 0);
     const contentRisk = Number(metrics.risk ?? metrics.threatRisk ?? (100 - Number(result.score || 100)));
-    const critical = result.status === 'danger' || injection >= 48 || generative >= 70 || contentRisk >= 62;
+    const critical = result.status === 'danger' || injection >= 48 || contentRisk >= 62;
     const review = result.status === 'review' || injection >= 28 || obfuscation >= 65 || contentRisk >= 30;
     if (!critical && !review) return null;
 
@@ -634,22 +683,22 @@ if (next && !next.startsWith('https://trusted.example')) {
     const severity = critical ? 'critical' : 'review';
     let title = 'Suspicious signal detected';
     if (source === 'code' && critical) title = 'Malicious code pattern detected';
-    else if (source === 'media' && (generative >= 70 || result.status === 'danger')) title = 'Deepfake artifact signature detected';
+    else if (source === 'media' && critical) title = 'File integrity warning';
     else if (source === 'text' && critical) title = 'Phishing intent detected';
     else if (source === 'code') title = 'Code anomaly requires review';
-    else if (source === 'media') title = 'Media integrity signal requires review';
-    else if (source === 'text') title = 'Social-engineering signal requires review';
+    else if (source === 'media') title = 'Suspicious file characteristics require review';
+    else if (source === 'text') title = 'URL phishing signal requires review';
 
-    const sourceLabel = source === 'code' ? 'DOM / CODE ANALYSIS' : source === 'media' ? 'MEDIA FORENSICS' : 'TEXT SHIELD';
+    const sourceLabel = source === 'code' ? 'DOM / CODE ANALYSIS' : source === 'media' ? 'FILE INSPECTION' : 'TEXT SHIELD';
     const message = critical
-      ? (source === 'media' ? 'Generative-artifact or container signals crossed the active protection threshold.' : source === 'code' ? 'Execution, decoder, redirect, or data-sink behavior crossed the active protection threshold.' : 'Urgency and credential-harvesting language crossed the active protection threshold.')
+      ? (source === 'media' ? 'File integrity or entropy signals crossed the protection threshold. This is an integrity warning, not a media-authenticity verdict.' : source === 'code' ? 'Execution, decoder, redirect, or data-sink behavior crossed the active protection threshold.' : 'URL or network payload signals crossed the active protection threshold.')
       : 'The inspection engine found a measurable anomaly. Evidence is held for analyst review.';
     const evidence = source === 'code'
       ? `C ${Number(metrics.cyclomaticComplexity || 1).toFixed(1)} · H ${Number(metrics.entropyIndex || 0).toFixed(1)} · injection ${injection.toFixed(1)}`
       : source === 'media'
-        ? `${metrics.signature || 'container'} · H ${Number(metrics.byteEntropy || 0).toFixed(1)} · ${metrics.sha256 ? metrics.sha256.slice(0, 12) : 'digest pending'}…`
-        : `urgency ${metrics.urgencySignals || 0} · credential terms ${metrics.credentialSignals || 0}`;
-    const risk = clamp(Math.max(contentRisk, injection, generative * 0.8, 100 - Number(result.score || 100)));
+        ? `${metrics.signature || 'unknown file'} · H ${Number(metrics.byteEntropy || 0).toFixed(1)} · ${metrics.sha256 ? metrics.sha256.slice(0, 12) : 'digest pending'}…`
+        : `url ${metrics.threatBreakdown?.url_phishing ?? 0} · file integrity ${metrics.threatBreakdown?.file_integrity ?? 0}`;
+    const risk = clamp(Math.max(contentRisk, injection, 100 - Number(result.score || 100)));
     return {
       fingerprint: result.evidenceFingerprint,
       severity,
@@ -768,17 +817,17 @@ if (next && !next.startsWith('https://trusted.example')) {
       button.classList.add('is-refreshing');
       window.setTimeout(() => {
         button.classList.remove('is-refreshing');
-        showToast('Protected perimeter synchronized just now.', 'fa-circle-nodes');
+        showToast('Demo perimeter refreshed. Device Guardian is layout only.', 'fa-circle-nodes');
       }, 780);
     });
     $('#manageDevices')?.addEventListener('click', () => {
-      showToast('Device management console is ready for your next connection.', 'fa-mobile-screen-button');
+      showToast('Device Guardian is demonstration layout only.', 'fa-mobile-screen-button');
     });
     $('#protectionToggle')?.addEventListener('click', (event) => {
       const toggle = event.currentTarget;
       const active = toggle.classList.toggle('active');
       toggle.setAttribute('aria-pressed', String(active));
-      showToast(active ? 'Adaptive protection enabled.' : 'Adaptive protection paused.', active ? 'fa-shield-halved' : 'fa-pause');
+      showToast(active ? 'Demo protection toggle on.' : 'Demo protection toggle off.', active ? 'fa-shield-halved' : 'fa-pause');
     });
   }
 
@@ -796,9 +845,18 @@ if (next && !next.startsWith('https://trusted.example')) {
         }
         if (sample === 'phishing' || sample === 'clean-text') {
           setMode('text');
-          $('#textInput').value = textSamples[sample];
+          const preset = textSamples[sample];
+          const textInput = $('#textInput');
+          const urlInput = $('#textUrlInput');
+          if (textInput) textInput.value = preset.body;
+          if (urlInput) urlInput.value = preset.url;
           updateCounters();
-          showToast('Text loaded. The API inspects URLs via filter-threat, not authorship language.', 'fa-message');
+          showToast(
+            preset.url
+              ? 'Text and URL loaded. Scan runs /api/v1/filter-threat on the URL, not authorship.'
+              : 'Text loaded without a URL. URL scan is disabled until a URL is supplied.',
+            'fa-message'
+          );
         }
       });
     });

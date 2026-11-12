@@ -1,6 +1,6 @@
 # Veritas Inspector
 
-A polished, responsive AI security command center for deepfake, malicious-code, and phishing inspection workflows, with a standalone mathematical code-analysis backend.
+A static dashboard for heuristic inspection of Python/JavaScript source, file integrity, and URL phishing signals, with a standalone mathematical analysis backend. It does not detect deepfakes or authorship.
 
 ## Frontend
 
@@ -81,10 +81,10 @@ curl -X POST http://localhost:8000/api/v1/filter-threat \\
 ## Included
 
 - Futuristic dark-mode dashboard with responsive mobile navigation.
-- Media forensics workspace with image/video drag-and-drop previews.
+- File inspection workspace with image/video drag-and-drop previews. The API hashes files and checks headers/entropy; it does not classify deepfakes.
 - DOM / code inspector with source and URL presets.
-- Text shield for phishing and authorship signals.
+- Text shield for URL phishing only. Free-form text without a URL is not scored and never receives a fabricated verdict.
 - Deep scan against the local analysis API with live verdict, score gauge, signal meters, and evidence log. Idle and error states are labeled as not backend verdicts.
-- Device Guardian perimeter widget, activity chart, adaptive protection toggle, toast feedback, and local report export.
+- Device Guardian perimeter widget and activity chart are demonstration layout only. Adaptive protection toggle, toast feedback, and local report export remain local UI.
 - Tailwind CSS and Font Awesome loaded via CDN; app behavior is implemented in vanilla JavaScript.
 - Real-time cyberpunk threat alerts raise an active banner, animated notification popups, visual sound-wave indicators, optional alert tones, and dismissal/review controls for malicious or suspicious **backend** findings.

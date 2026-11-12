@@ -47,6 +47,7 @@ function testMapInspectCode() {
   assert.strictEqual(mapped.confidencePercent, 91.2);
   assert.strictEqual(mapped.signals[0][0], 'Injection risk');
   assert.strictEqual(mapped.signals[0][1], 0);
+  assert.strictEqual(mapped.signals[0][2], 'safe');
 }
 
 function testMapFilterThreat() {
@@ -70,6 +71,10 @@ function testMapFilterThreat() {
   assert.strictEqual(mapped.statusText, 'BLOCK');
   assert.strictEqual(mapped.score, 8);
   assert.ok(mapped.caption.includes('blocked'));
+  assert.strictEqual(mapped.signals[0][0], 'File integrity risk');
+  assert.strictEqual(mapped.signals[0][2], 'safe');
+  assert.strictEqual(mapped.signals[1][0], 'URL phishing risk');
+  assert.strictEqual(mapped.signals[1][2], 'danger');
 }
 
 function testInvalidApiResponse() {
@@ -198,6 +203,53 @@ function testRateLimitOnInspect() {
   });
 }
 
+function testToneForRiskThresholds() {
+  assert.strictEqual(api.toneForRisk(null), 'review');
+  assert.strictEqual(api.toneForRisk(undefined), 'review');
+  assert.strictEqual(api.toneForRisk(0), 'safe');
+  assert.strictEqual(api.toneForRisk(39.99), 'safe');
+  assert.strictEqual(api.toneForRisk(40), 'review');
+  assert.strictEqual(api.toneForRisk(74.99), 'review');
+  assert.strictEqual(api.toneForRisk(75), 'danger');
+  assert.strictEqual(api.toneForRisk(100), 'danger');
+}
+
+function testHighRiskSignalsUseDangerTone() {
+  const mapped = api.mapInspectCode({
+    analysis_id: 'high-risk',
+    analyzed_at: '2026-11-12T00:00:00+00:00',
+    language: 'python',
+    trust_score: 12,
+    verification_status: 'MALICIOUS',
+    confidence_index: 88,
+    threat_breakdown: {
+      injection_risk: 91,
+      obfuscation_risk: 40,
+      entropy_risk: 22,
+      syntax_risk: 8
+    },
+    syntax_errors: [],
+    anomaly_flags: [],
+    analysis_logs: ['Trust engine verdict: MALICIOUS at 12.00/100.']
+  });
+  assert.strictEqual(mapped.status, 'danger');
+  assert.strictEqual(mapped.signals[0][2], 'danger');
+  assert.strictEqual(mapped.signals[1][2], 'review');
+  assert.strictEqual(mapped.signals[2][2], 'safe');
+  assert.strictEqual(mapped.signals[3][2], 'safe');
+}
+
+function testIsConfigured() {
+  delete global.VERITAS_API_BASE;
+  assert.strictEqual(api.isConfigured(), true);
+  withPageLocation({ protocol: 'https:', hostname: 'mohamdmamdoh83-coder.github.io', search: '' }, () => {
+    delete global.VERITAS_API_BASE;
+    assert.strictEqual(api.isConfigured(), false);
+    assert.strictEqual(api.isConfigured('https://veritas-api.example.com'), true);
+    assert.strictEqual(api.isConfigured('http://localhost:8000'), false);
+  });
+}
+
 function testTooLargeRejectedLocally() {
   const fakeFile = { name: 'huge.bin', size: 26 * 1024 * 1024 };
   return api.filterThreatFile(fakeFile).then(() => {
@@ -222,6 +274,9 @@ async function main() {
   await testOfflineHealth();
   await testAuthFailureOnInspect();
   await testRateLimitOnInspect();
+  testToneForRiskThresholds();
+  testHighRiskSignalsUseDangerTone();
+  testIsConfigured();
   await testTooLargeRejectedLocally();
   console.log('api.js client tests passed');
 }
