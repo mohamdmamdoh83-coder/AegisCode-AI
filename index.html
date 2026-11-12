@@ -149,8 +149,8 @@
             <div class="core-label">TRUTH<br /><b>ENGINE</b></div>
           </div>
           <div class="visual-chip chip-top"><i class="fa-solid fa-sparkles"></i><span><b>AI SIGNALS</b><small>2.8M evaluated</small></span></div>
-          <div class="visual-chip chip-right"><span class="mini-bars"><i></i><i></i><i></i><i></i><i></i></span><span><b>98.4%</b><small>confidence index</small></span></div>
-          <div class="visual-chip chip-bottom"><span class="chip-check"><i class="fa-solid fa-check"></i></span><span><b>NO ACTIVE THREATS</b><small>last sweep · 14 sec ago</small></span></div>
+          <div class="visual-chip chip-right" id="heroApiStatus" data-connection="connecting"><span class="mini-bars"><i></i><i></i><i></i><i></i><i></i></span><span><b id="heroApiStatusTitle">API STATUS</b><small id="heroApiStatusDetail">CHECKING HEALTH</small></span></div>
+          <div class="visual-chip chip-bottom"><span class="chip-check"><i class="fa-solid fa-display"></i></span><span><b>STATIC FRONTEND</b><small>GitHub Pages · no hosted API</small></span></div>
           <div class="visual-radial-label label-left">01 <span>INGEST</span></div>
           <div class="visual-radial-label label-bottom">03 <span>VERIFY</span></div>
         </div>
@@ -259,17 +259,17 @@ observer.observe(document.body, { subtree: true, attributes: true });</textarea>
               </div>
             </div>
 
-            <div class="glass-panel results-panel" id="results">
+            <div class="glass-panel results-panel" id="results" data-source="idle">
               <div class="results-header">
                 <div><div class="panel-kicker"><span class="live-dot"></span> VERDICT STREAM</div><h3>Analysis results</h3></div>
-                <div class="result-status review" id="resultStatus"><span class="status-pulse"></span><span id="resultStatusText">AWAITING INSPECTION</span></div>
+                <div class="result-status idle" id="resultStatus" data-source="idle"><span class="status-pulse"></span><span id="resultStatusText">AWAITING INSPECTION</span></div>
               </div>
               <div class="results-grid">
                 <div class="score-column">
                   <div class="score-gauge" id="scoreGauge" style="--score: 0" data-verdict="none">
                     <div class="gauge-inner"><span class="score-value" id="scoreValue">—</span><span class="score-unit" id="scoreUnit" hidden>/ 100</span><small id="scoreKind">NO VERDICT</small></div>
                   </div>
-                  <div class="score-caption"><i class="fa-solid fa-circle-exclamation"></i><span id="scoreCaption">No backend verdict yet. Run a deep scan against the analysis API.</span></div>
+                  <div class="score-caption"><i class="fa-solid fa-circle-pause"></i><span id="scoreCaption">No backend verdict yet. Run a deep scan against the analysis API.</span></div>
                 </div>
                 <div class="signals-column">
                   <div class="signals-heading"><span>Threat signal breakdown</span><span class="signals-legend"><i class="legend-safe"></i> Safe <i class="legend-review"></i> Review</span></div>
@@ -279,7 +279,7 @@ observer.observe(document.body, { subtree: true, attributes: true });</textarea>
                     <div class="signal-row"><div class="signal-label"><span class="signal-icon safe"><i class="fa-solid fa-wave-square"></i></span><span>Entropy risk</span><b>0%</b></div><div class="meter"><span style="width: 0%"></span></div></div>
                     <div class="signal-row"><div class="signal-label"><span class="signal-icon safe"><i class="fa-solid fa-code"></i></span><span>Syntax risk</span><b>0%</b></div><div class="meter"><span style="width: 0%"></span></div></div>
                   </div>
-                  <div class="confidence-line"><span>Confidence <b id="confidenceValue">None</b></span><span class="confidence-track"><i style="width: 0%" id="confidenceTrack"></i></span><span id="confidencePercent">0%</span></div>
+                  <div class="confidence-line"><span>Confidence <b id="confidenceValue">None</b></span><span class="confidence-track"><i style="width: 0%" id="confidenceTrack"></i></span><span id="confidencePercent">n/a</span></div>
                 </div>
               </div>
               <div class="results-log">

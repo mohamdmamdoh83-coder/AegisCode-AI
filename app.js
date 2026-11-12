@@ -368,6 +368,10 @@ if (next && !next.startsWith('https://trusted.example')) {
     if (shell) shell.setAttribute('data-connection', connection);
     if ($('#backendStatusTitle')) $('#backendStatusTitle').textContent = title;
     if ($('#backendStatusDetail')) $('#backendStatusDetail').textContent = detail;
+    const hero = $('#heroApiStatus');
+    if (hero) hero.setAttribute('data-connection', connection);
+    if ($('#heroApiStatusTitle')) $('#heroApiStatusTitle').textContent = title;
+    if ($('#heroApiStatusDetail')) $('#heroApiStatusDetail').textContent = detail;
   }
 
   async function pollBackendHealth() {
@@ -514,10 +518,11 @@ if (next && !next.startsWith('https://trusted.example')) {
     if (!Array.isArray(result.signals) || result.signals.length < 4) return;
     state.lastResult = result;
     const isVerdict = result.source === 'backend' && result.score != null && Number.isFinite(Number(result.score));
+    const source = result.source === 'backend' || result.source === 'error' || result.source === 'idle' ? result.source : 'idle';
     const gauge = $('#scoreGauge');
     if (gauge) {
       gauge.style.setProperty('--score', isVerdict ? result.score : 0);
-      gauge.setAttribute('data-verdict', isVerdict ? 'backend' : 'none');
+      gauge.setAttribute('data-verdict', isVerdict ? 'backend' : source === 'error' ? 'error' : 'none');
     }
     if ($('#scoreValue')) $('#scoreValue').textContent = isVerdict ? Number(result.score).toFixed(1) : '—';
     if ($('#scoreUnit')) $('#scoreUnit').hidden = !isVerdict;
@@ -525,15 +530,25 @@ if (next && !next.startsWith('https://trusted.example')) {
     if ($('#scoreCaption')) $('#scoreCaption').textContent = result.caption;
     const captionIcon = $('.score-caption i');
     if (captionIcon) {
-      captionIcon.className = result.status === 'danger' ? 'fa-solid fa-triangle-exclamation' : result.status === 'review' ? 'fa-solid fa-circle-exclamation' : 'fa-solid fa-circle-check';
-      captionIcon.style.color = result.status === 'danger' ? 'var(--danger)' : result.status === 'review' ? 'var(--amber)' : 'var(--lime)';
+      if (!isVerdict) {
+        captionIcon.className = source === 'error' ? 'fa-solid fa-plug-circle-xmark' : 'fa-solid fa-circle-pause';
+        captionIcon.style.color = source === 'error' ? 'var(--danger)' : 'var(--muted-light)';
+      } else {
+        captionIcon.className = result.status === 'danger' ? 'fa-solid fa-triangle-exclamation' : result.status === 'review' ? 'fa-solid fa-circle-exclamation' : 'fa-solid fa-circle-check';
+        captionIcon.style.color = result.status === 'danger' ? 'var(--danger)' : result.status === 'review' ? 'var(--amber)' : 'var(--lime)';
+      }
     }
     const status = $('#resultStatus');
-    if (status) status.className = `result-status ${result.status}`;
+    if (status) {
+      status.setAttribute('data-source', source);
+      status.className = isVerdict ? `result-status ${result.status}` : `result-status ${source}`;
+    }
+    const results = $('#results');
+    if (results) results.setAttribute('data-source', source);
     if ($('#resultStatusText')) $('#resultStatusText').textContent = result.statusText;
-    if ($('#confidenceValue')) $('#confidenceValue').textContent = result.confidence;
-    if ($('#confidencePercent')) $('#confidencePercent').textContent = `${result.confidencePercent}%`;
-    if ($('#confidenceTrack')) $('#confidenceTrack').style.width = `${result.confidencePercent}%`;
+    if ($('#confidenceValue')) $('#confidenceValue').textContent = isVerdict ? result.confidence : 'None';
+    if ($('#confidencePercent')) $('#confidencePercent').textContent = isVerdict ? `${result.confidencePercent}%` : 'n/a';
+    if ($('#confidenceTrack')) $('#confidenceTrack').style.width = isVerdict ? `${result.confidencePercent}%` : '0%';
 
     const rows = $$('.signal-row', $('#signalList'));
     rows.forEach((row, index) => {
