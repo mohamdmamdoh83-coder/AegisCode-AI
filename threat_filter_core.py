@@ -32,7 +32,9 @@ from urllib.parse import parse_qsl, unquote, urlsplit
 
 import numpy as np
 from fastapi import APIRouter, FastAPI, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
+
+from api_security import install_api_protections
 
 
 MAX_FILE_BYTES = 25 * 1024 * 1024
@@ -233,10 +235,27 @@ def _normalize_hashes(values: Sequence[str]) -> set[str]:
     return {str(value).strip().lower() for value in values if value and str(value).strip()}
 
 
+def _max_base64_chars(max_bytes: int) -> int:
+    """Return the maximum base64 character count that can decode to ``max_bytes``."""
+
+    return ((max_bytes + 2) // 3) * 4 + 8
+
+
 def _decode_base64_payload(value: str) -> bytes:
     if not isinstance(value, str) or not value.strip():
         raise PayloadDecodeError("file_content_base64 must be a non-empty base64 string")
+    # Reject oversized payloads from the encoded length *before* allocating the
+    # decoded buffer.  Whitespace is ignored by base64, so a cheap length check
+    # on the raw string still bounds memory even when padding/newlines exist.
+    max_chars = _max_base64_chars(MAX_FILE_BYTES)
+    if len(value) > max_chars + max_chars // 3:
+        raise PayloadDecodeError(f"decoded file exceeds the {MAX_FILE_BYTES:,}-byte limit")
     compact = re.sub(r"\s+", "", value)
+    if len(compact) > max_chars:
+        raise PayloadDecodeError(f"decoded file exceeds the {MAX_FILE_BYTES:,}-byte limit")
+    estimated = (len(compact) * 3) // 4
+    if estimated > MAX_FILE_BYTES:
+        raise PayloadDecodeError(f"decoded file exceeds the {MAX_FILE_BYTES:,}-byte limit")
     # Padding is added only when the length is otherwise valid for base64. The
     # strict decoder still rejects arbitrary non-alphabet characters.
     compact += "=" * (-len(compact) % 4)
@@ -542,6 +561,182 @@ _URL_SIGNATURES: tuple[tuple[str, re.Pattern[str], float], ...] = (
 _REDIRECT_KEYS = {"url", "uri", "redirect", "redirect_uri", "next", "return", "returnto", "continue", "dest", "destination", "target", "to"}
 _SUSPICIOUS_TLDS = {"zip", "mov", "click", "top", "gq", "tk", "work", "support", "country", "fit"}
 _BRAND_MARKERS = {"paypal", "microsoft", "google", "apple", "github", "amazon", "linkedin", "docusign"}
+_BRAND_CANONICAL_SUFFIXES: dict[str, tuple[str, ...]] = {
+    "paypal": (
+        "paypal.com",
+        "paypal.co.uk",
+        "paypal.de",
+        "paypal.fr",
+        "paypal.it",
+        "paypal.es",
+        "paypal.ca",
+        "paypal.com.au",
+        "paypal.me",
+        "paypalobjects.com",
+    ),
+    "microsoft": (
+        "microsoft.com",
+        "microsoftonline.com",
+        "live.com",
+        "office.com",
+        "outlook.com",
+        "azure.com",
+        "windows.net",
+        "msn.com",
+        "xbox.com",
+        "skype.com",
+    ),
+    "google": (
+        "google.com",
+        "googleapis.com",
+        "googleusercontent.com",
+        "gmail.com",
+        "youtube.com",
+        "gstatic.com",
+        "withgoogle.com",
+        "google.co.uk",
+        "google.de",
+        "googlevideo.com",
+        "googlemail.com",
+    ),
+    "apple": ("apple.com", "icloud.com", "appleid.com", "mzstatic.com", "itunes.com", "me.com"),
+    "github": ("github.com", "githubusercontent.com", "github.io", "githubapp.com", "githubassets.com"),
+    "amazon": (
+        "amazon.com",
+        "amazon.co.uk",
+        "amazon.de",
+        "amazon.fr",
+        "amazon.co.jp",
+        "amazonaws.com",
+        "amazon.ca",
+        "amazon.it",
+        "amazon.es",
+        "amazon.com.au",
+        "amazon.dev",
+    ),
+    "linkedin": ("linkedin.com", "licdn.com"),
+    "docusign": ("docusign.com", "docusign.net"),
+}
+_BRAND_BAIT_WORDS = {
+    "login",
+    "secure",
+    "account",
+    "verify",
+    "update",
+    "signin",
+    "sign-in",
+    "auth",
+    "support",
+    "billing",
+    "wallet",
+    "alert",
+    "confirm",
+    "verification",
+    "service",
+    "security",
+    "recover",
+    "unlock",
+    "webmail",
+}
+_SCHEME_TOKEN_RE = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]*):")
+_SPECIAL_URL_SCHEMES = {"javascript", "vbscript", "data", "file", "about", "blob", "mailto"}
+_WEB_URL_SCHEMES = {"http", "https"}
+_PORT_PREFIX_RE = re.compile(r"^\d+")
+
+
+def _host_matches_suffix(host: str, suffix: str) -> bool:
+    host = host.rstrip(".").lower()
+    suffix = suffix.rstrip(".").lower()
+    return host == suffix or host.endswith("." + suffix)
+
+
+def _is_canonical_brand_host(host: str, brand: str) -> bool:
+    suffixes = _BRAND_CANONICAL_SUFFIXES.get(brand, (f"{brand}.com",))
+    return any(_host_matches_suffix(host, suffix) for suffix in suffixes)
+
+
+def _label_impersonates_brand(label: str, brand: str) -> bool:
+    if not label or not brand:
+        return False
+    if label == brand:
+        return True
+    parts = [part for part in label.split("-") if part]
+    if brand in parts:
+        return True
+    if label.startswith(brand) and len(label) > len(brand):
+        remainder = label[len(brand) :].lstrip("-")
+        if remainder.isdigit() or remainder in _BRAND_BAIT_WORDS:
+            return True
+        if any(remainder.startswith(word) for word in _BRAND_BAIT_WORDS):
+            return True
+    if label.endswith(brand) and len(label) > len(brand):
+        prefix = label[: -len(brand)].rstrip("-")
+        if prefix in _BRAND_BAIT_WORDS:
+            return True
+    return False
+
+
+def _brand_impersonation_hits(host: str) -> list[str]:
+    """Return brands that appear as impersonation, not as the real brand domain.
+
+    Substring matching (``brand in host``) is intentionally avoided so
+    legitimate hosts such as ``googleapis.com`` or ``notpaypal.example`` are
+    not scored as lookalikes.
+    """
+
+    normalized = (host or "").rstrip(".").lower()
+    if not normalized:
+        return []
+    labels = [label for label in normalized.split(".") if label]
+    hits: list[str] = []
+    for brand in sorted(_BRAND_MARKERS):
+        if _is_canonical_brand_host(normalized, brand):
+            continue
+        if any(_label_impersonates_brand(label, brand) for label in labels):
+            hits.append(brand)
+    return hits
+
+
+def _extract_url_scheme(raw_url: str) -> tuple[str, bool]:
+    """Return ``(scheme, explicit)`` without treating ``host:port`` as a scheme.
+
+    RFC 3986 scheme tokens may contain dots, so ``example.com:8080/login``
+    would otherwise be parsed as scheme ``example.com`` and an empty host.
+    """
+
+    if raw_url.startswith("//"):
+        return "", False
+    match = _SCHEME_TOKEN_RE.match(raw_url)
+    if not match:
+        return "", False
+    scheme = match.group(1).lower()
+    rest = raw_url[match.end() :]
+    if rest.startswith("//"):
+        return scheme, True
+    if scheme in _SPECIAL_URL_SCHEMES or scheme in _WEB_URL_SCHEMES:
+        return scheme, True
+    if "." in scheme or _PORT_PREFIX_RE.match(rest):
+        return "", False
+    return scheme, True
+
+
+def _parse_http_url(raw_url: str) -> tuple[Any, str, Optional[int], str, bool]:
+    """Parse a URL, including schemeless ``host:port/path`` forms."""
+
+    scheme, explicit = _extract_url_scheme(raw_url)
+    if raw_url.startswith("//"):
+        parse_target = "https:" + raw_url
+    elif explicit:
+        parse_target = raw_url
+    else:
+        parse_target = "https://" + raw_url
+    try:
+        parts = urlsplit(parse_target)
+        host = (parts.hostname or "").strip(".").lower()
+        port = parts.port
+    except ValueError as exc:
+        raise ValueError(f"url cannot be parsed safely: {exc}") from exc
+    return parts, host, port, scheme, explicit
 
 
 class URLPhishingFilter:
@@ -558,15 +753,7 @@ class URLPhishingFilter:
         indicators: list[str] = []
         risk = 0.0
         hard_block = False
-        scheme_input = raw_url.split(":", 1)[0].lower() if ":" in raw_url else ""
-        parse_target = raw_url if scheme_input else f"https://{raw_url}"
-
-        try:
-            parts = urlsplit(parse_target)
-            host = (parts.hostname or "").strip(".").lower()
-            port = parts.port
-        except ValueError as exc:
-            raise ValueError(f"url cannot be parsed safely: {exc}") from exc
+        parts, host, port, scheme_input, explicit_scheme = _parse_http_url(raw_url)
 
         if not host:
             risk += 42.0
@@ -594,7 +781,7 @@ class URLPhishingFilter:
             indicators.append("non_web_scheme")
             risk += 55.0
             hard_block = scheme_input in {"javascript", "vbscript", "data", "file"}
-        elif not scheme_input:
+        elif not explicit_scheme:
             indicators.append("missing_explicit_scheme")
             risk += 5.0
         if scheme_input == "http":
@@ -620,11 +807,12 @@ class URLPhishingFilter:
             indicators.append("high_risk_tld")
             risk += 14.0
 
-        host_without_port = normalized_host.split(":", 1)[0]
-        for brand in _BRAND_MARKERS:
-            if brand in host_without_port and not host_without_port.endswith(f"{brand}.com") and not host_without_port == f"www.{brand}.com":
-                indicators.append(f"lookalike_brand:{brand}")
-                risk += 19.0
+        impersonated_brands: set[str] = set()
+        for candidate_host in (normalized_host, host):
+            impersonated_brands.update(_brand_impersonation_hits(candidate_host))
+        for brand in sorted(impersonated_brands):
+            indicators.append(f"lookalike_brand:{brand}")
+            risk += 19.0
 
         decoded_url = unquote(raw_url)
         for name, pattern, weight in _URL_SIGNATURES:
@@ -920,7 +1108,17 @@ class ThreatFilterEngine:
                 logs.append(_log(len(logs) + 1, "url", "critical", "URL inspection failed closed.", error=str(exc)))
 
         if payload.source_code:
-            code_report = self._inspect_code(payload.source_code, payload.language)
+            try:
+                code_report = self._inspect_code(payload.source_code, payload.language)
+            except ValueError as exc:
+                code_report = {
+                    "risk_score": 90.0,
+                    "hard_block": True,
+                    "error": str(exc),
+                    "forensic_logs": [
+                        {"level": "critical", "message": "Code inspection failed closed", "evidence": {"error_type": type(exc).__name__}}
+                    ],
+                }
             components["code_analysis"] = code_report
             code_risk = float(code_report.get("risk_score", 60.0))
             risk_values.append(code_risk)
@@ -1006,42 +1204,71 @@ class ThreatFilterEngine:
         return logs
 
     @staticmethod
+    def _load_analyze_code():
+        """Resolve ``analyze_code`` without treating this module as ``backend_core``.
+
+        ``threat_filter_core`` may run as ``__main__``.  Using
+        ``sys.modules['__main__']`` unconditionally would bind the wrong module
+        and then mask the failure behind a generic quarantine verdict.
+        """
+
+        backend_module = sys.modules.get("backend_core")
+        analyze_code = getattr(backend_module, "analyze_code", None)
+        if callable(analyze_code):
+            return analyze_code
+        main_module = sys.modules.get("__main__")
+        main_file = str(getattr(main_module, "__file__", "") or "")
+        if main_file.endswith("backend_core.py"):
+            analyze_code = getattr(main_module, "analyze_code", None)
+            if callable(analyze_code):
+                return analyze_code
+        from backend_core import analyze_code as imported_analyze_code
+
+        return imported_analyze_code
+
+    @staticmethod
     def _inspect_code(source_code: str, language: str) -> dict[str, Any]:
         if len(source_code) > MAX_TEXT_CHARS:
             return {"risk_score": 90.0, "hard_block": True, "error": f"source_code exceeds the {MAX_TEXT_CHARS:,}-character limit", "forensic_logs": [{"level": "critical", "message": "Code inspection failed closed", "evidence": {}}]}
         try:
-            # Import lazily so threat_filter_core remains independently
-            # importable and does not create a backend_core circular import.
-            backend_module = sys.modules.get("backend_core") or sys.modules.get("__main__")
-            analyze_code = getattr(backend_module, "analyze_code", None)
-            if analyze_code is None:
-                from backend_core import analyze_code  # type: ignore[no-redef]
-
-            report = analyze_code(source_code, language)
-            status = str(report.verification_status)
-            if status == "MALICIOUS":
-                risk_score = 92.0
-                hard_block = True
-            elif status == "REVIEW_REQUIRED":
-                risk_score = 58.0
-                hard_block = False
-            else:
-                risk_score = max(0.0, 18.0 + (100.0 - float(report.trust_score)) * 0.35)
-                hard_block = False
+            analyze_code = ThreatFilterEngine._load_analyze_code()
+        except ImportError as exc:
             return {
-                "language": report.language,
-                "risk_score": _round(risk_score),
-                "hard_block": hard_block,
-                "trust_score": report.trust_score,
-                "verification_status": status,
-                "confidence_index": report.confidence_index,
-                "anomaly_flags": report.anomaly_flags,
-                "syntax_errors": report.syntax_errors,
-                "threat_breakdown": report.threat_breakdown,
-                "forensic_logs": [{"level": "info", "message": message, "evidence": {}} for message in report.analysis_logs],
+                "risk_score": 72.0,
+                "hard_block": False,
+                "error": "code analyzer unavailable",
+                "forensic_logs": [
+                    {
+                        "level": "high",
+                        "message": "Code inspection unavailable; payload quarantined conservatively",
+                        "evidence": {"error_type": type(exc).__name__},
+                    }
+                ],
             }
-        except Exception as exc:  # fail closed for an unavailable code engine
-            return {"risk_score": 72.0, "hard_block": False, "error": "code analyzer unavailable", "forensic_logs": [{"level": "high", "message": "Code inspection unavailable; payload quarantined conservatively", "evidence": {"error_type": type(exc).__name__}}]}
+
+        report = analyze_code(source_code, language)
+        status = str(report.verification_status)
+        if status == "MALICIOUS":
+            risk_score = 92.0
+            hard_block = True
+        elif status == "REVIEW_REQUIRED":
+            risk_score = 58.0
+            hard_block = False
+        else:
+            risk_score = max(0.0, 18.0 + (100.0 - float(report.trust_score)) * 0.35)
+            hard_block = False
+        return {
+            "language": report.language,
+            "risk_score": _round(risk_score),
+            "hard_block": hard_block,
+            "trust_score": report.trust_score,
+            "verification_status": status,
+            "confidence_index": report.confidence_index,
+            "anomaly_flags": report.anomaly_flags,
+            "syntax_errors": report.syntax_errors,
+            "threat_breakdown": report.threat_breakdown,
+            "forensic_logs": [{"level": "info", "message": message, "evidence": {}} for message in report.analysis_logs],
+        }
 
 
 class ThreatFilterRequest(BaseModel):
@@ -1092,6 +1319,8 @@ class ThreatFilterRequest(BaseModel):
             file_bytes = _decode_base64_payload(encoded_file)
         elif self.file_content is not None:
             file_bytes = self.file_content.encode("utf-8")
+            if len(file_bytes) > MAX_FILE_BYTES:
+                raise PayloadDecodeError(f"decoded file exceeds the {MAX_FILE_BYTES:,}-byte limit")
         elif resolved_type in {"file", "binary"} and generic_text is not None:
             file_bytes = _decode_base64_payload(generic_text)
         else:
@@ -1167,9 +1396,66 @@ def _validate_model(data: Mapping[str, Any]) -> ThreatFilterRequest:
     return ThreatFilterRequest.parse_obj(data)
 
 
+def _content_length(request: Request) -> Optional[int]:
+    raw = request.headers.get("content-length")
+    if raw is None or raw == "":
+        return None
+    try:
+        length = int(raw)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="invalid content-length header") from exc
+    if length < 0:
+        raise HTTPException(status_code=400, detail="invalid content-length header")
+    return length
+
+
+def _reject_if_oversize(request: Request, limit: int) -> None:
+    length = _content_length(request)
+    if length is not None and length > limit:
+        raise HTTPException(status_code=413, detail=f"uploaded file exceeds the {MAX_FILE_BYTES:,}-byte limit")
+
+
+async def _read_capped(stream, limit: int) -> bytes:
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        piece = await stream.read(64 * 1024)
+        if not piece:
+            break
+        total += len(piece)
+        if total > limit:
+            raise HTTPException(status_code=413, detail=f"uploaded file exceeds the {MAX_FILE_BYTES:,}-byte limit")
+        chunks.append(piece)
+    return b"".join(chunks)
+
+
+async def _read_request_body_capped(request: Request, limit: int) -> bytes:
+    _reject_if_oversize(request, limit)
+    chunks: list[bytes] = []
+    total = 0
+    async for piece in request.stream():
+        total += len(piece)
+        if total > limit:
+            raise HTTPException(status_code=413, detail=f"uploaded file exceeds the {MAX_FILE_BYTES:,}-byte limit")
+        chunks.append(piece)
+    return b"".join(chunks)
+
+
+def _form_data_without_files(form: Mapping[str, Any]) -> dict[str, Any]:
+    data: dict[str, Any] = {key: value for key, value in form.items() if not hasattr(value, "read")}
+    for key in ("processes", "allowed_sha256", "blocked_sha256", "metadata"):
+        if isinstance(data.get(key), str) and data[key].strip():
+            try:
+                data[key] = json.loads(data[key])
+            except json.JSONDecodeError as exc:
+                raise HTTPException(status_code=422, detail=f"form field '{key}' must contain valid JSON") from exc
+    return data
+
+
 async def _request_to_model(request: Request) -> ThreatFilterRequest:
     content_type = request.headers.get("content-type", "").lower()
     if "application/json" in content_type or not content_type:
+        _reject_if_oversize(request, MAX_FILE_BYTES + 1_048_576)
         try:
             body = await request.json()
         except (json.JSONDecodeError, UnicodeDecodeError) as exc:
@@ -1178,40 +1464,39 @@ async def _request_to_model(request: Request) -> ThreatFilterRequest:
             raise HTTPException(status_code=422, detail="request body must be a JSON object")
         try:
             return _validate_model(body)
-        except Exception as exc:
+        except ValidationError as exc:
             raise HTTPException(status_code=422, detail="request body failed threat-filter validation") from exc
 
     if "multipart/form-data" in content_type or "application/x-www-form-urlencoded" in content_type:
+        _reject_if_oversize(request, MAX_FILE_BYTES + 1_048_576)
         try:
-            form = await request.form()
+            try:
+                form = await request.form(max_files=4, max_fields=32, max_part_size=MAX_FILE_BYTES)
+            except TypeError:
+                form = await request.form()
+        except HTTPException:
+            raise
         except Exception as exc:
+            message = str(exc).lower()
+            if "maximum size" in message or "too large" in message:
+                raise HTTPException(status_code=413, detail=f"uploaded file exceeds the {MAX_FILE_BYTES:,}-byte limit") from exc
             raise HTTPException(status_code=400, detail="multipart form parsing is unavailable or invalid") from exc
-        data: dict[str, Any] = {key: value for key, value in form.items() if not hasattr(value, "read")}
-        for key in ("processes", "allowed_sha256", "blocked_sha256", "metadata"):
-            if isinstance(data.get(key), str) and data[key].strip():
-                try:
-                    data[key] = json.loads(data[key])
-                except json.JSONDecodeError as exc:
-                    raise HTTPException(status_code=422, detail=f"form field '{key}' must contain valid JSON") from exc
+        data = _form_data_without_files(form)
         upload = form.get("file") or form.get("upload")
         if upload is not None and hasattr(upload, "read"):
-            raw_bytes = await upload.read()
-            if len(raw_bytes) > MAX_FILE_BYTES:
-                raise HTTPException(status_code=413, detail=f"uploaded file exceeds the {MAX_FILE_BYTES:,}-byte limit")
+            raw_bytes = await _read_capped(upload, MAX_FILE_BYTES)
             data["file_name"] = getattr(upload, "filename", None) or data.get("file_name") or "multipart-upload"
             data["file_content_base64"] = base64.b64encode(raw_bytes).decode("ascii")
             data.setdefault("payload_type", "file")
         try:
             return _validate_model(data)
-        except Exception as exc:
+        except ValidationError as exc:
             raise HTTPException(status_code=422, detail="multipart fields failed threat-filter validation") from exc
 
     # Raw octet streams are treated as files. This keeps the endpoint useful to
     # lightweight agents that cannot construct multipart forms.
     if content_type == "application/octet-stream" or content_type.startswith("application/octet-stream;"):
-        raw_bytes = await request.body()
-        if len(raw_bytes) > MAX_FILE_BYTES:
-            raise HTTPException(status_code=413, detail=f"uploaded file exceeds the {MAX_FILE_BYTES:,}-byte limit")
+        raw_bytes = await _read_request_body_capped(request, MAX_FILE_BYTES)
         return ThreatFilterRequest(
             payload_type="file",
             file_name=request.headers.get("x-file-name", "raw-upload"),
@@ -1220,19 +1505,71 @@ async def _request_to_model(request: Request) -> ThreatFilterRequest:
     raise HTTPException(status_code=415, detail="use JSON, multipart/form-data, or application/octet-stream")
 
 
+async def _request_to_input(request: Request) -> ThreatFilterInput:
+    """Build a :class:`ThreatFilterInput` without an extra base64 round-trip for uploads."""
+
+    content_type = request.headers.get("content-type", "").lower()
+    if "multipart/form-data" in content_type or "application/x-www-form-urlencoded" in content_type:
+        _reject_if_oversize(request, MAX_FILE_BYTES + 1_048_576)
+        try:
+            try:
+                form = await request.form(max_files=4, max_fields=32, max_part_size=MAX_FILE_BYTES)
+            except TypeError:
+                form = await request.form()
+        except HTTPException:
+            raise
+        except Exception as exc:
+            message = str(exc).lower()
+            if "maximum size" in message or "too large" in message:
+                raise HTTPException(status_code=413, detail=f"uploaded file exceeds the {MAX_FILE_BYTES:,}-byte limit") from exc
+            raise HTTPException(status_code=400, detail="multipart form parsing is unavailable or invalid") from exc
+        data = _form_data_without_files(form)
+        upload = form.get("file") or form.get("upload")
+        raw_bytes: Optional[bytes] = None
+        file_name = data.get("file_name")
+        if upload is not None and hasattr(upload, "read"):
+            raw_bytes = await _read_capped(upload, MAX_FILE_BYTES)
+            file_name = getattr(upload, "filename", None) or file_name or "multipart-upload"
+            data.setdefault("payload_type", "file")
+        try:
+            model = _validate_model(data)
+        except ValidationError as exc:
+            raise HTTPException(status_code=422, detail="multipart fields failed threat-filter validation") from exc
+        normalized = model.to_input()
+        if raw_bytes is not None:
+            normalized.file_bytes = raw_bytes
+            normalized.file_name = str(file_name or "multipart-upload")
+        return normalized
+
+    if content_type == "application/octet-stream" or content_type.startswith("application/octet-stream;"):
+        raw_bytes = await _read_request_body_capped(request, MAX_FILE_BYTES)
+        return ThreatFilterInput(
+            payload_type="file",
+            file_name=request.headers.get("x-file-name", "raw-upload"),
+            file_bytes=raw_bytes,
+        )
+
+    model = await _request_to_model(request)
+    return model.to_input()
+
+
 @threat_router.post("/api/v1/filter-threat")
 async def filter_threat(request: Request) -> dict[str, Any]:
     """Run the active endpoint-protection pipeline and return an action verdict."""
 
-    payload = await _request_to_model(request)
     try:
-        normalized = payload.to_input()
+        normalized = await _request_to_input(request)
         result = engine.filter_threat(normalized)
         return result.to_dict()
     except PayloadDecodeError as exc:
         # Invalid encoded file data is treated as an invalid request rather than
-        # silently inspecting a different byte stream.
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        # silently inspecting a different byte stream.  Size violations use 413
+        # so clients can distinguish "too large" from "malformed encoding".
+        detail = str(exc)
+        status = 413 if "exceeds" in detail else 400
+        raise HTTPException(status_code=status, detail=detail) from exc
+    except HTTPException:
+        raise
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:  # pragma: no cover - final fail-closed API guard
@@ -1245,6 +1582,16 @@ app = FastAPI(
     description="Read-only file, URL, code, and process threat filtering service.",
 )
 app.include_router(threat_router)
+
+
+@app.get("/health")
+def threat_filter_health() -> dict[str, str]:
+    """Liveness endpoint for the standalone threat-filter service."""
+
+    return {"status": "ok", "service": "veritas-inspector-threat-filter"}
+
+
+install_api_protections(app, max_body_bytes=MAX_FILE_BYTES + 1_048_576)
 
 
 if __name__ == "__main__":

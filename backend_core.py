@@ -37,6 +37,8 @@ import numpy as np
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
+from api_security import install_api_protections
+
 
 MAX_SOURCE_CHARS = 200_000
 SUPPORTED_LANGUAGES = {"auto", "python", "py", "javascript", "js"}
@@ -350,6 +352,23 @@ _JS_MULTI_OPERATORS = tuple(
 )
 _JS_OPEN_TO_CLOSE = {"{": "}", "(": ")", "[": "]"}
 _JS_CLOSE_TO_OPEN = {value: key for key, value in _JS_OPEN_TO_CLOSE.items()}
+_JS_REGEX_INTRODUCERS = {
+    "return",
+    "throw",
+    "case",
+    "typeof",
+    "new",
+    "delete",
+    "void",
+    "await",
+    "in",
+    "of",
+    "instanceof",
+    "yield",
+}
+_JS_REGEX_FLAGS = frozenset("gimsuyad")
+_JS_HEX_DIGIT = re.compile(r"[0-9A-Fa-f_]")
+_JS_DIGIT = re.compile(r"[0-9_]")
 
 
 def _advance_position(character: str, line: int, column: int) -> tuple[int, int]:
@@ -358,8 +377,32 @@ def _advance_position(character: str, line: int, column: int) -> tuple[int, int]
     return line, column + 1
 
 
+def _javascript_can_start_regex(previous: Optional[Lexeme]) -> bool:
+    """Return whether ``/`` at the current position may begin a regexp literal."""
+
+    if previous is None:
+        return True
+    if previous.kind == "punctuation" and previous.value in {"(", "[", "{", ",", ";", ":", "?", "~", "!", "${"}:
+        return True
+    if previous.kind == "operator":
+        return True
+    if previous.kind == "identifier" and previous.value in _JS_REGEX_INTRODUCERS:
+        return True
+    return False
+
+
 def _javascript_lexemes(source_code: str) -> tuple[list[Lexeme], list[str]]:
-    """Tokenize JavaScript and collect delimiter/literal syntax anomalies."""
+    """Tokenize JavaScript and collect delimiter/literal syntax anomalies.
+
+    The lexer remains conservative and dependency-free.  Improvements over the
+    original scanner:
+
+    * numeric literals no longer swallow following identifiers (``1.toString``)
+    * template interpolations contribute nested expression tokens so inner
+      delimiter errors are visible
+    * regexp literals are recognized in expression position so ``/pattern/`` is
+      not split into division operators
+    """
 
     lexemes: list[Lexeme] = []
     errors: list[str] = []
@@ -370,6 +413,247 @@ def _javascript_lexemes(source_code: str) -> tuple[list[Lexeme], list[str]]:
 
     def add_error(message: str, error_line: int, error_column: int) -> None:
         errors.append(f"JavaScript syntax anomaly at line {error_line}, column {error_column}: {message}")
+
+    def consume_escape(at: int, at_line: int, at_column: int) -> tuple[int, int, int]:
+        at_line, at_column = _advance_position(source_code[at], at_line, at_column)
+        at += 1
+        if at < length:
+            at_line, at_column = _advance_position(source_code[at], at_line, at_column)
+            at += 1
+        return at, at_line, at_column
+
+    def consume_quoted(quote: str, at: int, at_line: int, at_column: int, start_line: int, start_column: int) -> tuple[int, int, int, bool]:
+        start = at
+        at += 1
+        at_line, at_column = _advance_position(quote, at_line, at_column)
+        closed = False
+        while at < length:
+            current = source_code[at]
+            if current == "\\":
+                at, at_line, at_column = consume_escape(at, at_line, at_column)
+                continue
+            if current == quote:
+                at_line, at_column = _advance_position(current, at_line, at_column)
+                at += 1
+                closed = True
+                break
+            if current in {"\n", "\r"}:
+                add_error("unterminated string literal", start_line, start_column)
+                break
+            at_line, at_column = _advance_position(current, at_line, at_column)
+            at += 1
+        if not closed and (not errors or "unterminated string literal" not in errors[-1]):
+            add_error("unterminated string or template literal", start_line, start_column)
+        if closed:
+            lexemes.append(Lexeme("string", source_code[start:at], start_line, start_column))
+        return at, at_line, at_column, closed
+
+    def consume_template(at: int, at_line: int, at_column: int, start_line: int, start_column: int) -> tuple[int, int, int, bool]:
+        """Lex a template literal, emitting nested tokens for ``${...}`` bodies."""
+
+        chunk_start = at
+        chunk_line, chunk_column = at_line, at_column
+        at += 1
+        at_line, at_column = _advance_position("`", at_line, at_column)
+        closed = False
+        while at < length:
+            current = source_code[at]
+            if current == "\\":
+                at, at_line, at_column = consume_escape(at, at_line, at_column)
+                continue
+            if current == "`":
+                at_line, at_column = _advance_position(current, at_line, at_column)
+                at += 1
+                lexemes.append(Lexeme("string", source_code[chunk_start:at], chunk_line, chunk_column))
+                closed = True
+                break
+            if current == "$" and at + 1 < length and source_code[at + 1] == "{":
+                lexemes.append(Lexeme("string", source_code[chunk_start:at], chunk_line, chunk_column))
+                lexemes.append(Lexeme("punctuation", "${", at_line, at_column))
+                at += 2
+                at_column += 2
+                at, at_line, at_column, inner_closed = consume_interpolation(at, at_line, at_column)
+                if not inner_closed:
+                    add_error("unterminated template interpolation", start_line, start_column)
+                    return at, at_line, at_column, False
+                chunk_start = at
+                chunk_line, chunk_column = at_line, at_column
+                continue
+            at_line, at_column = _advance_position(current, at_line, at_column)
+            at += 1
+        if not closed:
+            add_error("unterminated string or template literal", start_line, start_column)
+        return at, at_line, at_column, closed
+
+    def consume_interpolation(at: int, at_line: int, at_column: int) -> tuple[int, int, int, bool]:
+        """Lex tokens inside a template interpolation until the matching ``}``."""
+
+        depth = 1
+        while at < length:
+            character = source_code[at]
+            if character.isspace():
+                at_line, at_column = _advance_position(character, at_line, at_column)
+                at += 1
+                continue
+            token_line, token_column = at_line, at_column
+            if source_code.startswith("//", at):
+                at += 2
+                at_column += 2
+                while at < length and source_code[at] != "\n":
+                    at_column += 1
+                    at += 1
+                continue
+            if source_code.startswith("/*", at):
+                at += 2
+                at_column += 2
+                closed_comment = False
+                while at < length:
+                    if source_code.startswith("*/", at):
+                        at += 2
+                        at_column += 2
+                        closed_comment = True
+                        break
+                    at_line, at_column = _advance_position(source_code[at], at_line, at_column)
+                    at += 1
+                if not closed_comment:
+                    add_error("unterminated block comment", token_line, token_column)
+                    return at, at_line, at_column, False
+                continue
+            if character in {"'", '"'}:
+                at, at_line, at_column, closed = consume_quoted(character, at, at_line, at_column, token_line, token_column)
+                if not closed:
+                    return at, at_line, at_column, False
+                continue
+            if character == "`":
+                at, at_line, at_column, closed = consume_template(at, at_line, at_column, token_line, token_column)
+                if not closed:
+                    return at, at_line, at_column, False
+                continue
+            if character == "{":
+                lexemes.append(Lexeme("punctuation", "{", token_line, token_column))
+                depth += 1
+                at += 1
+                at_column += 1
+                continue
+            if character == "}":
+                depth -= 1
+                at += 1
+                at_column += 1
+                if depth == 0:
+                    lexemes.append(Lexeme("punctuation", "}", token_line, token_column))
+                    return at, at_line, at_column, True
+                lexemes.append(Lexeme("punctuation", "}", token_line, token_column))
+                continue
+            at, at_line, at_column = consume_code_token(at, at_line, at_column)
+        return at, at_line, at_column, False
+
+    def consume_number(at: int, at_line: int, at_column: int) -> tuple[int, int, int]:
+        start = at
+        start_line, start_column = at_line, at_column
+        if source_code[at] == "0" and at + 1 < length and source_code[at + 1] in "xXoObB":
+            at += 2
+            at_column += 2
+            while at < length and _JS_HEX_DIGIT.fullmatch(source_code[at]):
+                at += 1
+                at_column += 1
+        else:
+            if source_code[at] == ".":
+                at += 1
+                at_column += 1
+            while at < length and _JS_DIGIT.fullmatch(source_code[at]):
+                at += 1
+                at_column += 1
+            if at < length and source_code[at] == "." and at + 1 < length and source_code[at + 1].isdigit():
+                at += 1
+                at_column += 1
+                while at < length and _JS_DIGIT.fullmatch(source_code[at]):
+                    at += 1
+                    at_column += 1
+            if at < length and source_code[at] in "eE":
+                lookahead = at + 1
+                if lookahead < length and source_code[lookahead] in "+-":
+                    lookahead += 1
+                if lookahead < length and source_code[lookahead].isdigit():
+                    at_column += lookahead - at
+                    at = lookahead
+                    while at < length and _JS_DIGIT.fullmatch(source_code[at]):
+                        at += 1
+                        at_column += 1
+        if at < length and source_code[at] == "n":
+            at += 1
+            at_column += 1
+        lexemes.append(Lexeme("number", source_code[start:at], start_line, start_column))
+        return at, at_line, at_column
+
+    def consume_regex(at: int, at_line: int, at_column: int) -> tuple[int, int, int, bool]:
+        start = at
+        start_line, start_column = at_line, at_column
+        at += 1
+        at_column += 1
+        in_class = False
+        closed = False
+        while at < length:
+            current = source_code[at]
+            if current == "\n":
+                break
+            if current == "\\":
+                at, at_line, at_column = consume_escape(at, at_line, at_column)
+                continue
+            if current == "[" and not in_class:
+                in_class = True
+            elif current == "]" and in_class:
+                in_class = False
+            elif current == "/" and not in_class:
+                at_line, at_column = _advance_position(current, at_line, at_column)
+                at += 1
+                closed = True
+                break
+            at_line, at_column = _advance_position(current, at_line, at_column)
+            at += 1
+        if closed:
+            while at < length and source_code[at] in _JS_REGEX_FLAGS:
+                at += 1
+                at_column += 1
+            lexemes.append(Lexeme("regex", source_code[start:at], start_line, start_column))
+            return at, at_line, at_column, True
+        add_error("unterminated regular expression literal", start_line, start_column)
+        return at, at_line, at_column, False
+
+    def consume_code_token(at: int, at_line: int, at_column: int) -> tuple[int, int, int]:
+        character = source_code[at]
+        token_line, token_column = at_line, at_column
+        previous = lexemes[-1] if lexemes else None
+        if _JS_IDENTIFIER_START.fullmatch(character):
+            start = at
+            at += 1
+            at_column += 1
+            while at < length and _JS_IDENTIFIER_PART.fullmatch(source_code[at]):
+                at += 1
+                at_column += 1
+            lexemes.append(Lexeme("identifier", source_code[start:at], token_line, token_column))
+            return at, at_line, at_column
+        if _JS_NUMBER_START.fullmatch(character) or (
+            character == "." and at + 1 < length and source_code[at + 1].isdigit()
+        ):
+            return consume_number(at, at_line, at_column)
+        operator = next((candidate for candidate in _JS_MULTI_OPERATORS if source_code.startswith(candidate, at)), None)
+        if operator:
+            lexemes.append(Lexeme("operator", operator, token_line, token_column))
+            return at + len(operator), at_line, at_column + len(operator)
+        if character == "/" and _javascript_can_start_regex(previous):
+            at, at_line, at_column, closed = consume_regex(at, at_line, at_column)
+            if not closed:
+                return at, at_line, at_column
+            return at, at_line, at_column
+        if character in "{}()[];,.?:":
+            lexemes.append(Lexeme("punctuation", character, token_line, token_column))
+            return at + 1, at_line, at_column + 1
+        if character in "=+-*/%!<>|&^~":
+            lexemes.append(Lexeme("operator", character, token_line, token_column))
+            return at + 1, at_line, at_column + 1
+        add_error(f"unexpected character {character!r}", token_line, token_column)
+        lexemes.append(Lexeme("unknown", character, token_line, token_column))
+        return at + 1, at_line, at_column + 1
 
     while index < length:
         character = source_code[index]
@@ -407,93 +691,28 @@ def _javascript_lexemes(source_code: str) -> tuple[list[Lexeme], list[str]]:
                 break
             continue
 
-        # Strings and template literals.  Template interpolation is kept as a
-        # literal token; nested expressions are still represented by the rest
-        # of the source and the entropy/injection detectors.
-        if character in {"'", '"', "`"}:
-            quote = character
-            value_start = index
-            index += 1
-            line, column = _advance_position(character, line, column)
-            closed = False
-            while index < length:
-                current = source_code[index]
-                if current == "\\":
-                    # Consume an escaped character as one lexical unit.
-                    line, column = _advance_position(current, line, column)
-                    index += 1
-                    if index < length:
-                        line, column = _advance_position(source_code[index], line, column)
-                        index += 1
-                    continue
-                if current == quote:
-                    line, column = _advance_position(current, line, column)
-                    index += 1
-                    closed = True
-                    break
-                if current in {"\n", "\r"} and quote != "`":
-                    add_error("unterminated string literal", start_line, start_column)
-                    break
-                line, column = _advance_position(current, line, column)
-                index += 1
+        if character in {"'", '"'}:
+            index, line, column, closed = consume_quoted(character, index, line, column, start_line, start_column)
             if not closed:
-                if not errors or "unterminated string literal" not in errors[-1]:
-                    add_error("unterminated string or template literal", start_line, start_column)
                 break
-            lexemes.append(Lexeme("string", source_code[value_start:index], start_line, start_column))
+            continue
+        if character == "`":
+            index, line, column, closed = consume_template(index, line, column, start_line, start_column)
+            if not closed:
+                break
             continue
 
-        if _JS_IDENTIFIER_START.fullmatch(character):
-            value_start = index
-            index += 1
-            column += 1
-            while index < length and _JS_IDENTIFIER_PART.fullmatch(source_code[index]):
-                index += 1
-                column += 1
-            lexemes.append(Lexeme("identifier", source_code[value_start:index], start_line, start_column))
-            continue
-
-        if _JS_NUMBER_START.fullmatch(character):
-            value_start = index
-            index += 1
-            column += 1
-            while index < length and re.match(r"[A-Za-z0-9._]", source_code[index]):
-                index += 1
-                column += 1
-            lexemes.append(Lexeme("number", source_code[value_start:index], start_line, start_column))
-            continue
-
-        operator = next((candidate for candidate in _JS_MULTI_OPERATORS if source_code.startswith(candidate, index)), None)
-        if operator:
-            lexemes.append(Lexeme("operator", operator, start_line, start_column))
-            index += len(operator)
-            column += len(operator)
-            continue
-
-        if character in "{}()[];,.?:":
-            lexemes.append(Lexeme("punctuation", character, start_line, start_column))
-            index += 1
-            column += 1
-            continue
-
-        # Treat remaining JavaScript symbols as operators.  This preserves
-        # enough structure for complexity calculations without pretending to
-        # implement the entire ECMAScript grammar.
-        if character in "=+-*/%!<>|&^~":
-            lexemes.append(Lexeme("operator", character, start_line, start_column))
-            index += 1
-            column += 1
-            continue
-
-        add_error(f"unexpected character {character!r}", start_line, start_column)
-        lexemes.append(Lexeme("unknown", character, start_line, start_column))
-        index += 1
-        column += 1
+        index, line, column = consume_code_token(index, line, column)
 
     # Build a second pass over delimiters so syntax errors are precise and the
     # structural tree can remain useful even when a close token is missing.
     delimiter_stack: list[Lexeme] = []
     for lexeme in lexemes:
+        if lexeme.kind in {"string", "regex", "number"}:
+            continue
+        if lexeme.value == "${":
+            delimiter_stack.append(Lexeme("punctuation", "{", lexeme.line, lexeme.column))
+            continue
         if lexeme.value in _JS_OPEN_TO_CLOSE:
             delimiter_stack.append(lexeme)
         elif lexeme.value in _JS_CLOSE_TO_OPEN:
@@ -562,7 +781,7 @@ def _javascript_syntax_nodes(lexemes: list[Lexeme]) -> tuple[SyntaxNode, list[Sy
 
         if lexeme.kind == "identifier":
             kind = _JS_KEYWORD_NODE_TYPES.get(lexeme.value, "Identifier")
-        elif lexeme.kind in {"string", "number"}:
+        elif lexeme.kind in {"string", "number", "regex"}:
             kind = "Literal"
         elif lexeme.kind == "operator":
             kind = "Operator"
@@ -974,6 +1193,9 @@ app = FastAPI(
     version="1.0.0",
     description="Deterministic AST and entropy-based code inspection service.",
 )
+# The combined service also hosts /api/v1/filter-threat, so the body limit must
+# cover file uploads rather than source-only inspection.
+install_api_protections(app, max_body_bytes=26 * 1024 * 1024)
 
 
 @app.get("/health")
