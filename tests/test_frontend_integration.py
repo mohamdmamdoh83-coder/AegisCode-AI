@@ -46,6 +46,13 @@ def test_frontend_does_not_present_mock_verdicts() -> None:
     assert "LOW RISK · VERIFIED" not in html
     assert "AWAITING INSPECTION" in html
     assert 'name="veritas-api-base-production"' in html
+    assert "98.4" not in html
+    assert "confidence index" not in html
+    assert "NO ACTIVE THREATS" not in html
+    assert 'id="heroApiStatus"' in html
+    assert "STATIC FRONTEND" in html
+    assert 'data-source="idle"' in html
+    assert "result-status idle" in app_js or 'result-status ${source}' in app_js
 
 
 def test_health_and_inspect_and_filter_endpoints(client: TestClient) -> None:
