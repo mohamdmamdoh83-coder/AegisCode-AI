@@ -37,9 +37,10 @@ Both `backend_core.py` and standalone `threat_filter_core.py` apply environment-
 - `ENVIRONMENT=production` — disables `/docs`, `/redoc`, and `/openapi.json` unless `ENABLE_API_DOCS=true`.
 - `API_KEY`, `VERITAS_API_KEY`, or `AEGIS_API_KEY` — when set, require `X-API-Key` or `Authorization: Bearer`. `/health` remains unauthenticated. **Do not put this key in browser JavaScript.** Leave it unset for a public GitHub Pages frontend.
 - `API_RATE_LIMIT` / `API_RATE_WINDOW_SECONDS` — per-client request budget (default 60/minute). `0` disables the limiter. Use one uvicorn worker so the in-process limiter is not split.
-- `TRUST_PROXY_HEADERS=true` — only behind Fly/Render/Cloud Run so rate limits use `X-Forwarded-For`.
+- `TRUST_PROXY_HEADERS=true` / `TRUSTED_PROXY_IPS` — only behind Fly/Render/Cloud Run so rate limits use `X-Forwarded-For`, and only from listed proxy IPs/CIDRs (default `127.0.0.1,::1`). Spoofed headers from other clients are ignored.
+- `REDIS_URL` — optional shared rate-limit backend across workers/instances (requires the optional `redis` package). Falls back to the in-process limiter automatically.
 - Uploads are rejected at **25 MB** before the file is fully decoded. The dashboard evidence limit matches this size.
-- Production start: `uvicorn backend_core:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips='*' --workers 1`. See `Dockerfile` and `.env.example`.
+- Production start: `uvicorn backend_core:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips="${FORWARDED_ALLOW_IPS:-127.0.0.1}" --workers 1`. See `Dockerfile` and `.env.example`. Never use `--forwarded-allow-ips='*'`.
 
 Standalone threat filtering:
 
@@ -100,3 +101,54 @@ Several dashboard visuals are static demonstration artwork. They are labeled `DE
 - The protocol / adaptive-protection card and its toggle are a local UI demo and change no protection settings.
 
 Real verdicts come only from the configured analysis API and are labeled with their backend origin. Idle and error states never show numeric mock scores.
+
+## Security hardening & API destination policy
+
+### Frontend API destination policy (P0)
+
+The dashboard never silently sends evidence to an untrusted host. A candidate
+API base is used only when it passes protocol checks (no mixed content, no
+embedded credentials/query/fragment) **and** one of:
+
+- its host is a loopback development address (`localhost`, `127.0.0.1`, `::1`), or
+- its host is the deployment-configured `veritas-api-base-production` meta tag, or
+- the user explicitly consents through a confirmation dialog that names the
+  exact destination.
+
+This applies uniformly to `?apiBase=`, `window.VERITAS_API_BASE`, the
+`veritas-api-base-development` meta tag, and `localStorage.veritas.apiBaseUrl`.
+Consent fails closed when no dialog is available, is cached per destination,
+and is revocable via `VeritasAPI.resetDestinationConsent()`. The selected
+destination is shown in status-chip tooltips, the connected status detail, and
+exported reports (`VeritasAPI.describeDestination()` never opens a dialog).
+CORS is treated as defense in depth only, never as the primary control.
+
+### Service hardening (P1)
+
+- **Proxy trust**: `--forwarded-allow-ips` defaults to `127.0.0.1` (set
+  `FORWARDED_ALLOW_IPS`; never `*`). `X-Forwarded-For` is honored for client
+  rate limiting only when the direct peer matches `TRUSTED_PROXY_IPS`
+  (IP/CIDR, default loopback), so clients cannot spoof identities.
+- **Rate limiting**: fixed-window per client with `429` + `Retry-After` +
+  `X-RateLimit-*` headers and bounded memory. Set `REDIS_URL` (optional
+  `redis` package) for multi-worker/multi-instance budgets; any Redis failure
+  falls back to the in-process limiter without failing requests.
+- **Security headers**: every response carries `X-Content-Type-Options:
+  nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`,
+  `Cache-Control: no-store`, `Permissions-Policy`, and a `default-src 'none'`
+  CSP (omitted on doc pages so Swagger UI renders).
+- **API keys** (`X-API-Key` / `Authorization: Bearer`) are compared in constant
+  time server-side and must never appear in browser JavaScript.
+
+### Verdict taxonomy and honest signals
+
+Backend verdicts use five explicit assessments: **Confirmed Detection**
+(MALICIOUS — strong or combined indicators), **Suspicious Behavior**
+(REVIEW_REQUIRED — measurable anomaly), **Heuristic Warning** (SECURE with
+noted anomaly flags), **No Threat Detected**, and **Analysis Error**
+(component failure; never presented as a threat). A single weak or moderate
+indicator (e.g. one `eval()` or `os.system()` call) can raise at most
+Suspicious Behavior; MALICIOUS requires a strong signature or combined
+signals. Displayed trust scores are capped consistently with the tier
+(MALICIOUS ≤ 40, REVIEW ≤ 75). These are explainable heuristic checks — not
+AI, ML, or behavioral analysis.
