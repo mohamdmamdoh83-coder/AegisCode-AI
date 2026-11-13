@@ -344,6 +344,40 @@
     return [label, value, toneForRisk(value), icon];
   }
 
+  var ASSESSMENTS = ['Confirmed Detection', 'Suspicious Behavior', 'Heuristic Warning', 'No Threat Detected', 'Analysis Error'];
+
+  function normalizeAssessment(value) {
+    return typeof value === 'string' && ASSESSMENTS.indexOf(value) >= 0 ? value : null;
+  }
+
+  // Fallback taxonomy for older backends that omit the assessment field.
+  function assessmentFromInspection(body, statusRaw) {
+    if (statusRaw === 'MALICIOUS') return 'Confirmed Detection';
+    if (statusRaw === 'REVIEW_REQUIRED') return 'Suspicious Behavior';
+    var flags = (Array.isArray(body.anomaly_flags) && body.anomaly_flags.length > 0) ||
+      (Array.isArray(body.syntax_errors) && body.syntax_errors.length > 0);
+    return flags ? 'Heuristic Warning' : 'No Threat Detected';
+  }
+
+  function assessmentFromFilter(body, action) {
+    var breakdown = body.threat_breakdown && typeof body.threat_breakdown === 'object' ? body.threat_breakdown : {};
+    var components = body.components && typeof body.components === 'object' ? body.components : {};
+    var componentError = Boolean(breakdown.error) || Object.keys(components).some(function (key) {
+      var report = components[key];
+      return report && typeof report === 'object' && !Array.isArray(report) && report.error;
+    });
+    if (componentError) return 'Analysis Error';
+    if (action === 'BLOCK') return 'Confirmed Detection';
+    if (action === 'QUARANTINE') return 'Suspicious Behavior';
+    var highest = 0;
+    Object.keys(breakdown).forEach(function (key) {
+      if (key === 'error') return;
+      var value = Number(breakdown[key]) || 0;
+      if (value > highest) highest = value;
+    });
+    return highest >= 20 ? 'Heuristic Warning' : 'No Threat Detected';
+  }
+
   function mapInspectCode(payload) {
     var body = requireObject(payload, 'inspect-code');
     var statusRaw = String(body.verification_status || '');
@@ -389,6 +423,7 @@
       source: 'backend',
       isVerdict: true,
       endpoint: '/api/v1/inspect-code',
+      assessment: normalizeAssessment(body.assessment) || assessmentFromInspection(body, statusRaw),
       raw: body
     };
   }
@@ -437,6 +472,7 @@
       source: 'backend',
       isVerdict: true,
       endpoint: '/api/v1/filter-threat',
+      assessment: normalizeAssessment(body.assessment) || assessmentFromFilter(body, action),
       raw: body
     };
   }
@@ -473,7 +509,8 @@
       evidenceFingerprint: 'error:' + code,
       source: 'error',
       isVerdict: false,
-      backendError: true
+      backendError: true,
+      assessment: 'Analysis Error'
     };
   }
 
@@ -496,7 +533,8 @@
       analysisLogs: [],
       evidenceFingerprint: 'idle',
       source: 'idle',
-      isVerdict: false
+      isVerdict: false,
+      assessment: null
     };
   }
 

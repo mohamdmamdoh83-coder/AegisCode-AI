@@ -587,7 +587,7 @@ if (next && !next.startsWith('https://trusted.example')) {
     }
     if ($('#scoreValue')) $('#scoreValue').textContent = isVerdict ? Number(result.score).toFixed(1) : '—';
     if ($('#scoreUnit')) $('#scoreUnit').hidden = !isVerdict;
-    if ($('#scoreKind')) $('#scoreKind').textContent = isVerdict ? 'TRUST SCORE' : 'NO VERDICT';
+    if ($('#scoreKind')) $('#scoreKind').textContent = isVerdict ? 'TRUST SCORE · ' + String(result.assessment || 'NO THREAT DETECTED').toUpperCase() : 'NO VERDICT';
     if ($('#scoreCaption')) $('#scoreCaption').textContent = result.caption;
     const captionIcon = $('.score-caption i');
     if (captionIcon) {
@@ -888,6 +888,7 @@ if (next && !next.startsWith('https://trusted.example')) {
       `Inspection mode: ${state.mode.toUpperCase()}`,
       `API destination: ${api().describeDestination().base || 'not configured'}`,
       `Result origin: ${origin}`,
+      `Assessment: ${result.assessment || 'n/a'}`,
       `Trust score: ${result.source === 'backend' && result.score != null ? `${Number(result.score).toFixed(1)} / 100` : 'n/a (no backend verdict)'}`,
       `Verdict: ${result.statusText}`,
       `Confidence: ${result.confidence} (${result.confidencePercent}%)`,

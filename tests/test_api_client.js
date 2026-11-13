@@ -399,6 +399,39 @@ function testLoopbackDevelopmentBaseNeedsNoConsent() {
   api.resetDestinationConsent();
 }
 
+function testAssessmentTaxonomy() {
+  // Backend-provided assessment wins when valid.
+  let mapped = api.mapInspectCode({ trust_score: 95, verification_status: 'SECURE', assessment: 'Heuristic Warning' });
+  assert.strictEqual(mapped.assessment, 'Heuristic Warning');
+  // Fallbacks keep the taxonomy consistent with older backends.
+  mapped = api.mapInspectCode({ trust_score: 10, verification_status: 'MALICIOUS', threat_breakdown: {} });
+  assert.strictEqual(mapped.assessment, 'Confirmed Detection');
+  mapped = api.mapInspectCode({ trust_score: 80, verification_status: 'SECURE', anomaly_flags: ['loop_dense'], threat_breakdown: {} });
+  assert.strictEqual(mapped.assessment, 'Heuristic Warning');
+  mapped = api.mapInspectCode({ trust_score: 99, verification_status: 'SECURE', threat_breakdown: {} });
+  assert.strictEqual(mapped.assessment, 'No Threat Detected');
+  assert.strictEqual(api.errorResult({ code: 'failed', message: 'boom' }).assessment, 'Analysis Error');
+  assert.strictEqual(api.idleResult().assessment, null);
+}
+
+function testFilterAssessmentTaxonomy() {
+  const filterBase = { threat_level_index: 3, confidence_index: 90, summary: 'ok', threat_breakdown: {}, forensic_logs: [] };
+  let mapped = api.mapFilterThreat({ ...filterBase, action: 'ALLOW', threat_breakdown: { url_phishing: 5 } });
+  assert.strictEqual(mapped.assessment, 'No Threat Detected');
+  mapped = api.mapFilterThreat({ ...filterBase, action: 'ALLOW', threat_breakdown: { url_phishing: 30 } });
+  assert.strictEqual(mapped.assessment, 'Heuristic Warning');
+  mapped = api.mapFilterThreat({ ...filterBase, action: 'BLOCK', threat_breakdown: { url_phishing: 95 } });
+  assert.strictEqual(mapped.assessment, 'Confirmed Detection');
+  // A failed component dominates the label even when the policy action is BLOCK.
+  mapped = api.mapFilterThreat({
+    ...filterBase,
+    action: 'BLOCK',
+    threat_breakdown: { error: 100 },
+    components: { url_filter: { error: 'url analysis failed' } }
+  });
+  assert.strictEqual(mapped.assessment, 'Analysis Error');
+}
+
 async function main() {
   testResolveBaseUrl();
   testNoSecretsOnClient();
@@ -423,6 +456,8 @@ async function main() {
   testSafeBaseRejectsCredentialAndQueryShapes();
   testDescribeDestinationNeverPrompts();
   testLoopbackDevelopmentBaseNeedsNoConsent();
+  testAssessmentTaxonomy();
+  testFilterAssessmentTaxonomy();
   console.log('api.js client tests passed');
 }
 

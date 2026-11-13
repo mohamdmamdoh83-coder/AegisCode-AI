@@ -47,6 +47,31 @@ SECURE = "SECURE"
 REVIEW_REQUIRED = "REVIEW_REQUIRED"
 MALICIOUS = "MALICIOUS"
 
+# Explicit assessment taxonomy.  These labels are deliberately distinct from
+# the verification status: they tell the analyst how much weight the verdict
+# carries.  This is a deterministic heuristic engine — not AI/ML.
+ASSESSMENT_CONFIRMED = "Confirmed Detection"
+ASSESSMENT_SUSPICIOUS = "Suspicious Behavior"
+ASSESSMENT_HEURISTIC = "Heuristic Warning"
+ASSESSMENT_NONE = "No Threat Detected"
+ASSESSMENT_ERROR = "Analysis Error"
+
+
+def assess_verification(verification_status: str, anomaly_flags: Iterable[str]) -> str:
+    """Map a verification status plus anomaly flags to the assessment taxonomy.
+
+    * MALICIOUS      -> Confirmed Detection  (strong or combined signals)
+    * REVIEW_REQUIRED -> Suspicious Behavior (measurable anomaly, needs review)
+    * SECURE + flags -> Heuristic Warning   (noted signals below review level)
+    * SECURE, clean  -> No Threat Detected
+    """
+
+    if verification_status == MALICIOUS:
+        return ASSESSMENT_CONFIRMED
+    if verification_status == REVIEW_REQUIRED:
+        return ASSESSMENT_SUSPICIOUS
+    return ASSESSMENT_HEURISTIC if any(flag for flag in anomaly_flags) else ASSESSMENT_NONE
+
 
 class UnsupportedLanguageError(ValueError):
     """Raised when a caller asks for a language outside the supported set."""
@@ -145,6 +170,7 @@ class InspectionResult:
     anomaly_flags: list[str]
     syntax_errors: list[str]
     analysis_logs: list[str]
+    assessment: str
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -990,7 +1016,15 @@ def calculate_trust_score(metrics: AnomalyMetrics | Mapping[str, Any]) -> TrustS
     ):
         status = MALICIOUS
         trust_score = min(trust_score, 39.99)
-    elif not syntax_valid or trust_score < 75.0 or obfuscation_risk >= 78.0 or entropy_risk >= 90.0:
+    elif (
+        injection_risk >= 25.0  # a lone dynamic-execution/destructive pattern
+        or not syntax_valid
+        or trust_score < 75.0
+        or obfuscation_risk >= 78.0
+        or entropy_risk >= 90.0
+    ):
+        # Single weak or moderate indicators cap the verdict at review level;
+        # MALICIOUS always requires a strong signature or combined signals.
         status = REVIEW_REQUIRED
         trust_score = min(trust_score, 74.99)
     else:
@@ -1167,6 +1201,7 @@ def analyze_code(
         anomaly_flags=anomaly_flags,
         syntax_errors=syntax_errors,
         analysis_logs=logs,
+        assessment=assess_verification(trust.verification_status, anomaly_flags),
     )
 
 
