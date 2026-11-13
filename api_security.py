@@ -187,21 +187,36 @@ def configured_trusted_proxies() -> list[str]:
     return [item.strip() for item in raw.split(",") if item.strip()]
 
 
-def _ip_in_trusted_proxies(peer: str, proxies: Iterable[str]) -> bool:
-    """True when ``peer`` matches one of the configured IPs or CIDR ranges."""
+def _parse_ip(value: str):
+    """Parse an IP literal, unwrapping IPv4-mapped IPv6 (``::ffff:1.2.3.4``)."""
 
     import ipaddress
 
     try:
-        address = ipaddress.ip_address(peer)
+        address = ipaddress.ip_address(value.strip())
     except ValueError:
+        return None
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+        return address.ipv4_mapped
+    return address
+
+
+def _ip_in_trusted_proxies(peer: str, proxies: Iterable[str]) -> bool:
+    """True when ``peer`` matches one of the configured IPs or CIDR ranges."""
+
+    address = _parse_ip(peer)
+    if address is None:
         return False
     for entry in proxies:
+        parsed = _parse_ip(entry)
+        if parsed is not None:
+            if address == parsed:
+                return True
+            continue
         try:
-            if "/" in entry:
-                if address in ipaddress.ip_network(entry, strict=False):
-                    return True
-            elif address == ipaddress.ip_address(entry):
+            import ipaddress
+
+            if address in ipaddress.ip_network(entry, strict=False):
                 return True
         except ValueError:
             continue
@@ -220,10 +235,22 @@ def _client_key(scope: Scope, headers: dict[str, str]) -> str:
     client = scope.get("client")
     peer = str(client[0]) if client and client[0] else ""
     trust_proxy = os.environ.get("TRUST_PROXY_HEADERS", "").strip().lower() in {"1", "true", "yes"}
-    if trust_proxy and peer and _ip_in_trusted_proxies(peer, configured_trusted_proxies()):
+    proxies = configured_trusted_proxies()
+    if trust_proxy and peer and _ip_in_trusted_proxies(peer, proxies):
         forwarded = headers.get("x-forwarded-for", "")
         if forwarded:
-            return forwarded.split(",", 1)[0].strip() or "unknown"
+            # Walk right-to-left and take the first hop that is NOT a trusted
+            # proxy: rightmost entries are appended by the nearest proxy (and
+            # therefore real), while leftmost entries are client-supplied and
+            # spoofable. Anything that is not a valid IP literal falls back to
+            # the direct peer instead of being used as an identity.
+            candidates = [item.strip() for item in forwarded.split(",") if item.strip()]
+            for candidate in reversed(candidates):
+                if _ip_in_trusted_proxies(candidate, proxies):
+                    continue
+                if _parse_ip(candidate) is not None:
+                    return candidate
+                break
     return peer or "unknown"
 
 
@@ -299,6 +326,18 @@ def _allow_rate_redis(client: Any, client_key: str, limit: int, window: float) -
     count = int(client.incr(key))
     if count == 1:
         client.expire(key, int(window) + 1)
+    elif count == 2:
+        # Heal a key left without a TTL if a crash ever occurred between INCR
+        # and EXPIRE (an orphaned key would otherwise block the client
+        # forever). Checked once per window, so the steady state stays at two
+        # round trips per window instead of per request.
+        ttl_fn = getattr(client, "ttl", None)
+        if callable(ttl_fn):
+            try:
+                if int(ttl_fn(key)) == -1:
+                    client.expire(key, int(window) + 1)
+            except Exception:
+                pass
     remaining = max(0, limit - count)
     return count <= limit, remaining
 

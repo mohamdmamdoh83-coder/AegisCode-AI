@@ -683,11 +683,18 @@ if (next && !next.startsWith('https://trusted.example')) {
 
   function threatAlertPayload(result, sourceType) {
     if (!result || !result.evidenceFingerprint || result.source !== 'backend') return null;
+    // Analysis failures are never presented as threats (fail closed in the
+    // result row, but do not raise a "threat detected" banner).
+    if (result.assessment === 'Analysis Error') return null;
     const metrics = result.metrics || {};
     const injection = Number(metrics.injectionIndex ?? metrics.threatBreakdown?.injectionRisk ?? 0);
     const obfuscation = Number(metrics.obfuscationIndex ?? metrics.threatBreakdown?.obfuscationRisk ?? 0);
     const contentRisk = Number(metrics.risk ?? metrics.threatRisk ?? (100 - Number(result.score || 100)));
-    const critical = result.status === 'danger' || injection >= 48 || contentRisk >= 62;
+    // Only confirmed detections (backend MALICIOUS/BLOCK verdicts) may raise a
+    // critical "malicious" banner; strong-but-unconfirmed signals stay at the
+    // review level so heuristic/suspicious findings are never presented as
+    // confirmed malware.
+    const critical = result.status === 'danger' && result.isVerdict === true && result.assessment === 'Confirmed Detection';
     const review = result.status === 'review' || injection >= 28 || obfuscation >= 65 || contentRisk >= 30;
     if (!critical && !review) return null;
 

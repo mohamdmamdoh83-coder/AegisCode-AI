@@ -60,8 +60,10 @@
   }
 
   function isLoopbackHost(hostname) {
-    var host = String(hostname || '').replace(/^\[|\]$/g, '').toLowerCase();
-    return host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '0.0.0.0';
+    var host = String(hostname || '').replace(/^\[|\]$/g, '').toLowerCase().replace(/\.$/, '');
+    if (host.indexOf('::ffff:') === 0) host = host.slice(7);
+    return host === 'localhost' || host === '::1' || host === '0.0.0.0' ||
+      /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host);
   }
 
   function isPublicHttpsPage() {
@@ -78,8 +80,15 @@
     }
   }
 
+  // Control characters, line separators, bidi/zero-width characters and raw
+  // backslashes can visually spoof a consent dialog (fake lines, reversed
+  // text, host confusion). They are never valid in an API base URL.
+  var UNSAFE_BASE_CHARS = /[\u0000-\u001F\u007F\u200B-\u200F\u2028\u2029\u202A-\u202E\u2066-\u2069\\]/;
+
   function isSafeApiBase(value) {
-    var parsed = parseAbsoluteUrl(value);
+    var raw = String(value == null ? '' : value);
+    if (UNSAFE_BASE_CHARS.test(raw)) return false;
+    var parsed = parseAbsoluteUrl(raw);
     if (!parsed) return false;
     // A base URL must be a plain origin (optionally with a path prefix).
     // Embedded credentials, query strings, and fragments are never valid API
@@ -90,6 +99,15 @@
       return parsed.protocol === 'https:' && !isLoopbackHost(parsed.hostname);
     }
     return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  }
+
+  // Canonical display/key form: scheme://host[:port][/path]. Parsed through
+  // the URL constructor first, so backslash/percent/case tricks collapse to
+  // the destination that would actually be contacted.
+  function normalizeBase(value) {
+    var parsed = parseAbsoluteUrl(value);
+    if (!parsed) return '';
+    return trimSlash(parsed.origin + parsed.pathname);
   }
 
   function readQueryBase() {
@@ -152,10 +170,10 @@
   }
 
   function isTrustedHost(hostname) {
-    var host = String(hostname || '').toLowerCase();
+    var host = String(hostname || '').replace(/^\[|\]$/g, '').toLowerCase().replace(/\.$/, '');
     if (!host) return false;
     if (isLoopbackHost(host)) return true;
-    var productionHost = configuredProductionHost();
+    var productionHost = configuredProductionHost().replace(/\.$/, '');
     return Boolean(productionHost) && host === productionHost;
   }
 
@@ -178,10 +196,13 @@
 
   function evaluateCandidate(candidate, source, mayPrompt) {
     if (candidate == null) return null;
-    var trimmed = trimSlash(String(candidate).trim());
-    if (!trimmed) return null;
-    if (!destinationAllowed(trimmed, mayPrompt)) return null;
-    return { base: trimmed, source: source };
+    var raw = String(candidate).trim();
+    if (!raw) return null;
+    if (!isSafeApiBase(raw)) return null;
+    var normalized = normalizeBase(raw);
+    if (!normalized) return null;
+    if (!destinationAllowed(normalized, mayPrompt)) return null;
+    return { base: normalized, source: source };
   }
 
   function resolveDestination(explicit, mayPrompt) {
@@ -271,7 +292,10 @@
     var fetchOptions = {
       method: (options && options.method) || 'GET',
       headers: Object.assign({}, options && options.headers),
-      signal: controller ? controller.signal : undefined
+      signal: controller ? controller.signal : undefined,
+      // Never follow redirects: a 307/308 would re-send evidence to another
+      // host without passing the destination policy or the consent dialog.
+      redirect: 'error'
     };
     if (options && options.body !== undefined) fetchOptions.body = options.body;
     if (options && options.timeoutMs && controller) {
@@ -614,7 +638,9 @@
     describeDestination: describeDestination,
     resetDestinationConsent: resetDestinationConsent,
     isConfigured: function isConfigured(explicit) {
-      return Boolean(resolveBaseUrl(explicit));
+      // Checking configuration must never open a consent dialog; consent is
+      // requested when a request is about to carry evidence (resolveBaseUrl).
+      return Boolean(resolveDestination(explicit, false).base);
     },
     toneForRisk: toneForRisk,
     classifyHttpError: classifyHttpError,

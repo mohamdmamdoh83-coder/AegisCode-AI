@@ -432,6 +432,92 @@ function testFilterAssessmentTaxonomy() {
   assert.strictEqual(mapped.assessment, 'Analysis Error');
 }
 
+function testUnsafeBaseCharactersRejected() {
+  // Control chars, bidi overrides, and raw backslashes must never reach a
+  // consent dialog or be honored as a destination.
+  const hostile = [
+    'https://evil.example/\u202Egnp.exe',
+    'https://evil.example/\nTrusted host',
+    'https://evil.example\t.com',
+    'https://evil.com\\@veritas-api.example.com'
+  ];
+  hostile.forEach((value) => {
+    assert.strictEqual(api.isSafeApiBase(value), false, value);
+  });
+  api.resetDestinationConsent();
+  withPageLocation({ protocol: 'https:', hostname: 'mohamdmamdoh83-coder.github.io', search: '' }, () => {
+    delete global.VERITAS_API_BASE;
+    let prompts = 0;
+    global.window.confirm = () => { prompts += 1; return false; };
+    hostile.forEach((value) => {
+      assert.strictEqual(api.resolveBaseUrl(value), '');
+    });
+    assert.strictEqual(prompts, 0, 'hostile bases must be skipped without a dialog');
+  });
+  api.resetDestinationConsent();
+}
+
+function testConsentDialogShowsNormalizedDestination() {
+  api.resetDestinationConsent();
+  withPageLocation({ protocol: 'https:', hostname: 'mohamdmamdoh83-coder.github.io', search: '' }, () => {
+    delete global.VERITAS_API_BASE;
+    let shown = '';
+    let prompts = 0;
+    global.window.confirm = (message) => { prompts += 1; shown = message; return true; };
+    // Case/path variants of one destination share one normalized consent.
+    assert.strictEqual(api.resolveBaseUrl('HTTPS://Attacker.Example'), 'https://attacker.example');
+    assert.ok(shown.indexOf('https://attacker.example') >= 0, 'dialog must show the normalized destination');
+    assert.strictEqual(api.resolveBaseUrl('https://attacker.example/'), 'https://attacker.example');
+    assert.strictEqual(api.resolveBaseUrl('https://attacker.example'), 'https://attacker.example');
+    assert.strictEqual(prompts, 1, 'normalized variants must reuse the cached consent');
+  });
+  api.resetDestinationConsent();
+}
+
+function testIsConfiguredNeverPrompts() {
+  api.resetDestinationConsent();
+  withPageLocation({ protocol: 'https:', hostname: 'mohamdmamdoh83-coder.github.io', search: '?apiBase=https://attacker.example' }, () => {
+    delete global.VERITAS_API_BASE;
+    let prompts = 0;
+    global.window.confirm = () => { prompts += 1; return true; };
+    assert.strictEqual(api.isConfigured(), false, 'unconsented destination is not configured yet');
+    assert.strictEqual(prompts, 0, 'isConfigured must never open a consent dialog');
+    // Consent happens where evidence would be sent...
+    assert.strictEqual(api.resolveBaseUrl(), 'https://attacker.example');
+    assert.strictEqual(prompts, 1);
+    // ...after which the destination is configured without further prompts.
+    assert.strictEqual(api.isConfigured(), true);
+    assert.strictEqual(prompts, 1);
+  });
+  api.resetDestinationConsent();
+}
+
+function testLoopbackAndHostFormsTrusted() {
+  withMetaTags({ 'veritas-api-base-production': 'https://veritas-api.example.com' }, () => {
+    assert.strictEqual(api.isTrustedHost('veritas-api.example.com.'), true, 'trailing dot is DNS-equivalent');
+    assert.strictEqual(api.isTrustedHost('127.0.0.2'), true, 'all of 127.0.0.0/8 is loopback');
+    assert.strictEqual(api.isTrustedHost('::ffff:127.0.0.1'), true, 'v4-mapped loopback unwraps');
+    assert.strictEqual(api.isTrustedHost('[::ffff:127.0.0.1]'), true);
+    assert.strictEqual(api.isTrustedHost('evil.veritas-api.example.com'), false);
+  });
+}
+
+async function testFetchNeverFollowsRedirects() {
+  const previous = global.fetch;
+  let recorded = null;
+  global.fetch = async (url, options) => {
+    recorded = { url: String(url), options: options || {} };
+    return { ok: true, status: 200, text: async () => '{"status":"ok","service":"t"}' };
+  };
+  try {
+    await api.health();
+    assert.strictEqual(recorded.options.redirect, 'error', 'evidence requests must never follow redirects');
+  } finally {
+    if (previous === undefined) delete global.fetch;
+    else global.fetch = previous;
+  }
+}
+
 async function main() {
   testResolveBaseUrl();
   testNoSecretsOnClient();
@@ -458,6 +544,11 @@ async function main() {
   testLoopbackDevelopmentBaseNeedsNoConsent();
   testAssessmentTaxonomy();
   testFilterAssessmentTaxonomy();
+  testUnsafeBaseCharactersRejected();
+  testConsentDialogShowsNormalizedDestination();
+  testIsConfiguredNeverPrompts();
+  testLoopbackAndHostFormsTrusted();
+  await testFetchNeverFollowsRedirects();
   console.log('api.js client tests passed');
 }
 

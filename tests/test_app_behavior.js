@@ -18,7 +18,8 @@ const {
   fakeFile,
   settle,
   PAGES_LOCATION,
-  LOCAL_LOCATION
+  LOCAL_LOCATION,
+  HEALTH_PAYLOAD
 } = require('./frontend_harness');
 
 const IMAGE_A = () => fakeFile({ name: 'evidence-a.png', type: 'image/png', size: 2048 });
@@ -392,6 +393,105 @@ function restoreGlobal(name, descriptor) {
   else delete global[name];
 }
 
+// Alert-banner taxonomy: Suspicious/Heuristic findings must never be
+// presented as confirmed malware, and Analysis Errors must never raise a
+// "threat detected" banner.
+function verdictFetch(overrides) {
+  return (url) => {
+    if (String(url).includes('inspect-code')) {
+      return {
+        ok: true,
+        status: 200,
+        statusText: 'stub',
+        text: async () => JSON.stringify({
+          analysis_id: 'testanalysis0001',
+          analyzed_at: '2026-11-12T00:00:00+00:00',
+          language: 'python',
+          trust_score: 60,
+          verification_status: 'REVIEW_REQUIRED',
+          confidence_index: 88,
+          threat_breakdown: { injection_risk: 55, obfuscation_risk: 20, entropy_risk: 15, syntax_risk: 0 },
+          anomaly_flags: ['injection_risk'],
+          syntax_errors: [],
+          analysis_logs: ['Trust engine verdict: REVIEW_REQUIRED at 60.00/100.'],
+          assessment: 'Suspicious Behavior',
+          ...overrides
+        })
+      };
+    }
+    return { ok: true, status: 200, statusText: 'stub', text: async () => JSON.stringify(HEALTH_PAYLOAD) };
+  };
+}
+
+async function testSuspiciousVerdictBannerIsReviewNotCritical() {
+  const h = createHarness({ location: LOCAL_LOCATION, fetch: verdictFetch({}) });
+  try {
+    const { tabs } = withModeDom(h);
+    h.boot();
+    tabs[1].dispatch('click');
+    h.get('#codeInput').value = 'eval(cmd)';
+    h.get('#scanButton').dispatch('click');
+    await settle();
+    const shell = h.get('#threatAlertShell');
+    assert.strictEqual(shell.hidden, false, 'a suspicious verdict raises the review banner');
+    assert.strictEqual(h.get('#alertSeverity').textContent, 'REVIEW REQUIRED');
+    assert.doesNotMatch(h.get('#alertTitle').textContent, /Malicious/i);
+    assert.strictEqual(h.get('#scoreKind').textContent, 'TRUST SCORE · SUSPICIOUS BEHAVIOR');
+  } finally {
+    await cleanup(h);
+  }
+}
+
+async function testConfirmedVerdictBannerIsCritical() {
+  const h = createHarness({
+    location: LOCAL_LOCATION,
+    fetch: verdictFetch({
+      trust_score: 22,
+      verification_status: 'MALICIOUS',
+      threat_breakdown: { injection_risk: 92, obfuscation_risk: 60, entropy_risk: 40, syntax_risk: 0 },
+      assessment: 'Confirmed Detection'
+    })
+  });
+  try {
+    const { tabs } = withModeDom(h);
+    h.boot();
+    tabs[1].dispatch('click');
+    h.get('#codeInput').value = 'eval(compile(p))';
+    h.get('#scanButton').dispatch('click');
+    await settle();
+    assert.strictEqual(h.get('#threatAlertShell').hidden, false);
+    assert.strictEqual(h.get('#alertSeverity').textContent, 'CRITICAL SIGNAL');
+    assert.match(h.get('#alertTitle').textContent, /Malicious code pattern detected/);
+    assert.strictEqual(h.get('#scoreKind').textContent, 'TRUST SCORE · CONFIRMED DETECTION');
+  } finally {
+    await cleanup(h);
+  }
+}
+
+async function testAnalysisErrorNeverRaisesThreatBanner() {
+  const h = createHarness({
+    location: LOCAL_LOCATION,
+    fetch: (url) => {
+      if (String(url).includes('inspect-code')) {
+        return { ok: true, status: 200, statusText: 'stub', text: async () => 'not-json <html>oops</html>' };
+      }
+      return { ok: true, status: 200, statusText: 'stub', text: async () => JSON.stringify(HEALTH_PAYLOAD) };
+    }
+  });
+  try {
+    const { tabs } = withModeDom(h);
+    h.boot();
+    tabs[1].dispatch('click');
+    h.get('#codeInput').value = 'eval(cmd)';
+    h.get('#scanButton').dispatch('click');
+    await settle();
+    assert.strictEqual(h.get('#threatAlertShell').hidden, true, 'an analysis error must not raise a threat banner');
+    assert.strictEqual(h.get('#scoreKind').textContent, 'NO VERDICT');
+  } finally {
+    await cleanup(h);
+  }
+}
+
 async function testHarnessRestoresApiGlobalsWhenBaseOriginallyDefined() {
   const apiBaseBefore = globalDescriptor('VERITAS_API_BASE');
   const veritasBefore = globalDescriptor('VeritasAPI');
@@ -509,6 +609,9 @@ const tests = [
   ['smoke: phishing preset loads', testSmokePhishingPreset],
   ['smoke: clear button empties text and URL fields', testSmokeClearTextAndUrl],
   ['smoke: media preview select and remove', testSmokeMediaSelectAndRemove],
+  ['alerts: suspicious verdict raises review banner, never "malicious"', testSuspiciousVerdictBannerIsReviewNotCritical],
+  ['alerts: confirmed verdict raises critical malicious banner', testConfirmedVerdictBannerIsCritical],
+  ['alerts: analysis error never raises a threat banner', testAnalysisErrorNeverRaisesThreatBanner],
   ['harness: API globals restored after cleanup (VERITAS_API_BASE originally defined)', testHarnessRestoresApiGlobalsWhenBaseOriginallyDefined],
   ['harness: API globals restored after cleanup (VERITAS_API_BASE originally absent)', testHarnessRestoresApiGlobalsWhenBaseOriginallyAbsent],
   ['harness: globals restored when a test throws (finally cleanup)', testHarnessRestoreRunsWhenTestThrows]
