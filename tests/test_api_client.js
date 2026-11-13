@@ -518,6 +518,46 @@ async function testFetchNeverFollowsRedirects() {
   }
 }
 
+async function testHealthNeverPromptsForConsent() {
+  api.resetDestinationConsent();
+  const previous = global.fetch;
+  const urls = [];
+  global.fetch = async (url) => {
+    urls.push(String(url));
+    return { ok: true, status: 200, text: async () => '{"status":"ok","service":"t"}' };
+  };
+  try {
+    // On a production page: the unconsented override is ignored and health
+    // fails as unconfigured — without ever opening the consent dialog.
+    await withPageLocation({ protocol: 'https:', hostname: 'mohamdmamdoh83-coder.github.io', search: '?apiBase=https://attacker.example' }, async () => {
+      delete global.VERITAS_API_BASE;
+      let prompts = 0;
+      global.window.confirm = () => { prompts += 1; return true; };
+      await api.health().then(
+        () => { throw new Error('health must fail unconfigured'); },
+        (error) => {
+          assert.strictEqual(error.code, 'unconfigured');
+          assert.strictEqual(prompts, 0, 'health probes must never open the consent dialog');
+          assert.strictEqual(urls.length, 0);
+        }
+      );
+    });
+    // On a dev page: health silently falls back to the local default.
+    await withPageLocation({ protocol: 'http:', hostname: 'localhost', search: '?apiBase=https://attacker.example' }, async () => {
+      delete global.VERITAS_API_BASE;
+      let prompts = 0;
+      global.window.confirm = () => { prompts += 1; return true; };
+      await api.health();
+      assert.strictEqual(prompts, 0, 'health probes must never open the consent dialog');
+      assert.deepStrictEqual(urls, ['http://localhost:8000/health']);
+    });
+  } finally {
+    if (previous === undefined) delete global.fetch;
+    else global.fetch = previous;
+    api.resetDestinationConsent();
+  }
+}
+
 async function main() {
   testResolveBaseUrl();
   testNoSecretsOnClient();
@@ -549,6 +589,7 @@ async function main() {
   testIsConfiguredNeverPrompts();
   testLoopbackAndHostFormsTrusted();
   await testFetchNeverFollowsRedirects();
+  await testHealthNeverPromptsForConsent();
   console.log('api.js client tests passed');
 }
 

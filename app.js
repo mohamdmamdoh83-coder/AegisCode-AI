@@ -556,6 +556,11 @@ if (next && !next.startsWith('https://trusted.example')) {
           appendEvidenceEntry(new Date().toLocaleTimeString([], { hour12: false }), 'info', 'fa-terminal', message, result.statusText);
         });
       }
+      // A successful response proves connectivity; refresh the status chip so
+      // it names the real destination (e.g. after consent was just granted).
+      const scanDestination = api().describeDestination();
+      const scanHostSuffix = scanDestination && scanDestination.host ? ` · API ${scanDestination.host}` : '';
+      setBackendStatus('connected', 'API CONNECTED', 'SCAN COMPLETE' + scanHostSuffix);
       showToast('Backend verdict received.', result.status === 'danger' ? 'fa-triangle-exclamation' : 'fa-shield-halved');
     } catch (error) {
       if (token !== state.inspectToken) return;

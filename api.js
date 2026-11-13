@@ -278,7 +278,11 @@
   }
 
   async function request(path, options) {
-    var baseUrl = resolveBaseUrl(options && options.baseUrl);
+    // Evidence-carrying requests consent to the destination; passive probes
+    // (health) pass allowConsentPrompt: false and fall back silently instead
+    // of opening the "send inspection evidence" dialog.
+    var allowConsentPrompt = !(options && options.allowConsentPrompt === false);
+    var baseUrl = resolveDestination(options && options.baseUrl, allowConsentPrompt).base;
     if (!baseUrl) {
       throw ApiError(
         'unconfigured',
@@ -563,7 +567,7 @@
   }
 
   async function health(baseUrl) {
-    var payload = await request('/health', { method: 'GET', baseUrl: baseUrl, timeoutMs: 4000 });
+    var payload = await request('/health', { method: 'GET', baseUrl: baseUrl, timeoutMs: 4000, allowConsentPrompt: false });
     if (!payload || payload.status !== 'ok') {
       throw ApiError('invalid_response', 'Health endpoint did not return status ok.', 200);
     }
