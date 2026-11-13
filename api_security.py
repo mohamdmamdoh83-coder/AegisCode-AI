@@ -50,13 +50,18 @@ _AUTH_EXEMPT_PREFIXES: tuple[str, ...] = ()
 
 _rate_hits: dict[str, deque[float]] = defaultdict(deque)
 _rate_lock = Lock()
+_redis_client_singleton: Any = None
+_redis_fallback_logged = False
 
 
 def reset_security_state() -> None:
-    """Clear rate-limit buckets.  Intended for tests only."""
+    """Clear rate-limit buckets and the optional Redis client.  Tests only."""
 
+    global _redis_client_singleton, _redis_fallback_logged
     with _rate_lock:
         _rate_hits.clear()
+    _redis_client_singleton = None
+    _redis_fallback_logged = False
 
 
 def is_production() -> bool:
@@ -169,16 +174,57 @@ def _header_map(scope: Scope) -> dict[str, str]:
     return headers
 
 
+def configured_trusted_proxies() -> list[str]:
+    """Peer IPs/CIDRs whose ``X-Forwarded-For`` we honor.
+
+    Defaults to loopback only.  Deployments behind Fly/Render/Cloud Run must
+    set ``TRUSTED_PROXY_IPS`` to the platform's proxy addresses so client-IP
+    detection (and therefore rate limiting) works, while spoofed
+    ``X-Forwarded-For`` headers from arbitrary clients are ignored.
+    """
+
+    raw = os.environ.get("TRUSTED_PROXY_IPS", "127.0.0.1,::1")
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+def _ip_in_trusted_proxies(peer: str, proxies: Iterable[str]) -> bool:
+    """True when ``peer`` matches one of the configured IPs or CIDR ranges."""
+
+    import ipaddress
+
+    try:
+        address = ipaddress.ip_address(peer)
+    except ValueError:
+        return False
+    for entry in proxies:
+        try:
+            if "/" in entry:
+                if address in ipaddress.ip_network(entry, strict=False):
+                    return True
+            elif address == ipaddress.ip_address(entry):
+                return True
+        except ValueError:
+            continue
+    return False
+
+
 def _client_key(scope: Scope, headers: dict[str, str]) -> str:
+    """Stable per-client identity for rate limiting.
+
+    ``X-Forwarded-For`` is only consulted when (a) TRUST_PROXY_HEADERS is
+    enabled and (b) the direct peer is a configured trusted proxy.  Otherwise
+    the header is attacker-controlled and would let clients rotate identities
+    to evade rate limits.
+    """
+
+    client = scope.get("client")
+    peer = str(client[0]) if client and client[0] else ""
     trust_proxy = os.environ.get("TRUST_PROXY_HEADERS", "").strip().lower() in {"1", "true", "yes"}
-    if trust_proxy:
+    if trust_proxy and peer and _ip_in_trusted_proxies(peer, configured_trusted_proxies()):
         forwarded = headers.get("x-forwarded-for", "")
         if forwarded:
             return forwarded.split(",", 1)[0].strip() or "unknown"
-    client = scope.get("client")
-    if client and client[0]:
-        return str(client[0])
-    return "unknown"
+    return peer or "unknown"
 
 
 def _path_is_auth_exempt(path: str) -> bool:
@@ -208,9 +254,56 @@ def _api_key_matches(provided: str, expected: str) -> bool:
     return hmac.compare_digest(provided_bytes, expected_bytes)
 
 
-def _allow_rate(client_key: str, limit: int, window: float) -> tuple[bool, int]:
-    if limit <= 0:
-        return True, limit
+def _log_redis_fallback(reason: str) -> None:
+    global _redis_fallback_logged
+    if not _redis_fallback_logged:
+        logger.warning("distributed rate limiting unavailable (%s); using in-process limiter", reason)
+        _redis_fallback_logged = True
+
+
+def _get_redis_client() -> Any:
+    """Optional shared rate-limit backend selected by ``REDIS_URL``.
+
+    ``redis`` is an optional dependency: when the package is missing, the
+    server is unreachable, or no URL is configured, this returns ``None`` and
+    the in-process limiter keeps protecting the worker (safe fallback).
+    """
+
+    global _redis_client_singleton
+    url = os.environ.get("REDIS_URL", "").strip()
+    if not url:
+        return None
+    if _redis_client_singleton is not None:
+        return _redis_client_singleton
+    try:
+        import redis  # type: ignore  # optional dependency
+    except ImportError:
+        _log_redis_fallback("redis package not installed")
+        return None
+    try:
+        client = redis.Redis.from_url(
+            url,
+            socket_timeout=0.5,
+            socket_connect_timeout=0.5,
+        )
+        client.ping()
+    except Exception:
+        _log_redis_fallback("redis unreachable")
+        return None
+    _redis_client_singleton = client
+    return client
+
+
+def _allow_rate_redis(client: Any, client_key: str, limit: int, window: float) -> tuple[bool, int]:
+    key = f"veritas:rate:{client_key}:{int(window)}"
+    count = int(client.incr(key))
+    if count == 1:
+        client.expire(key, int(window) + 1)
+    remaining = max(0, limit - count)
+    return count <= limit, remaining
+
+
+def _allow_rate_memory(client_key: str, limit: int, window: float) -> tuple[bool, int]:
     now = time.monotonic()
     cutoff = now - window
     with _rate_lock:
@@ -226,6 +319,24 @@ def _allow_rate(client_key: str, limit: int, window: float) -> tuple[bool, int]:
             return False, 0
         bucket.append(now)
         return True, remaining - 1
+
+
+def _allow_rate(client_key: str, limit: int, window: float) -> tuple[bool, int]:
+    """Fixed-window limiter.  Redis when configured, in-process otherwise.
+
+    Both paths are safe; a Redis failure at any point degrades to the
+    in-process limiter for that request instead of failing open or closed.
+    """
+
+    if limit <= 0:
+        return True, limit
+    client = _get_redis_client()
+    if client is not None:
+        try:
+            return _allow_rate_redis(client, client_key, limit, window)
+        except Exception:
+            _log_redis_fallback("redis error")
+    return _allow_rate_memory(client_key, limit, window)
 
 
 async def _send_json(
@@ -402,6 +513,46 @@ class AccessLogMiddleware:
             )
 
 
+class SecurityHeadersMiddleware:
+    """Attach conservative security headers to every response.
+
+    The services return JSON (plus optional dev docs), so a tight
+    ``default-src 'none'`` CSP is safe and blocks content sniffing, framing,
+    and referrer leakage.  Doc pages get no CSP so Swagger UI keeps rendering.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        path = scope.get("path") or ""
+        is_doc_page = path.startswith("/docs") or path.startswith("/redoc")
+
+        async def send_wrapper(message: dict[str, Any]) -> None:
+            if message["type"] == "http.response.start":
+                raw_headers = list(message.get("headers") or [])
+                present = {name.lower() for name, _ in raw_headers}
+
+                def put(name: str, value: str) -> None:
+                    if name not in present:
+                        raw_headers.append((name.encode("latin-1"), value.encode("latin-1")))
+
+                put("x-content-type-options", "nosniff")
+                put("x-frame-options", "DENY")
+                put("referrer-policy", "no-referrer")
+                put("cache-control", "no-store")
+                put("permissions-policy", "camera=(), microphone=(), geolocation=()")
+                if not is_doc_page:
+                    put("content-security-policy", "default-src 'none'; frame-ancestors 'none'; base-uri 'none'")
+                message = {**message, "headers": raw_headers}
+            await send(message)
+
+        await self.app(scope, receive, send_wrapper)
+
+
 class ApiKeyMiddleware:
     """Optional API-key gate.
 
@@ -455,6 +606,7 @@ def install_api_protections(app: Any, *, max_body_bytes: Optional[int] = None) -
     app.add_middleware(RateLimitMiddleware)
     app.add_middleware(MaxBodySizeMiddleware, max_bytes=max_body_bytes)
     app.add_middleware(AccessLogMiddleware)
+    app.add_middleware(SecurityHeadersMiddleware)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=origins,
