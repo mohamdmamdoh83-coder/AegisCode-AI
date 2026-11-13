@@ -492,6 +492,28 @@ async function testAnalysisErrorNeverRaisesThreatBanner() {
   }
 }
 
+async function testSuccessfulScanRefreshesStatusChipWithDestination() {
+  const h = createHarness({ location: LOCAL_LOCATION, fetch: verdictFetch({}) });
+  try {
+    const { tabs } = withModeDom(h);
+    h.boot();
+    tabs[1].dispatch('click');
+    h.get('#codeInput').value = 'eval(cmd)';
+    h.get('#scanButton').dispatch('click');
+    await settle();
+    // A successful scan proves connectivity: the chip must name the actual
+    // API destination instead of leaving a stale 'not configured' state.
+    assert.strictEqual(h.get('#backendStatusTitle').textContent, 'API CONNECTED');
+    assert.strictEqual(h.get('#backendStatusDetail').textContent, 'SCAN COMPLETE · API localhost');
+    assert.match(
+      h.get('#backendStatus').getAttribute('title') || '',
+      /Analysis API destination: http:\/\/localhost:8000/
+    );
+  } finally {
+    await cleanup(h);
+  }
+}
+
 async function testHarnessRestoresApiGlobalsWhenBaseOriginallyDefined() {
   const apiBaseBefore = globalDescriptor('VERITAS_API_BASE');
   const veritasBefore = globalDescriptor('VeritasAPI');
@@ -612,6 +634,7 @@ const tests = [
   ['alerts: suspicious verdict raises review banner, never "malicious"', testSuspiciousVerdictBannerIsReviewNotCritical],
   ['alerts: confirmed verdict raises critical malicious banner', testConfirmedVerdictBannerIsCritical],
   ['alerts: analysis error never raises a threat banner', testAnalysisErrorNeverRaisesThreatBanner],
+  ['status: successful scan refreshes the chip with the API destination', testSuccessfulScanRefreshesStatusChipWithDestination],
   ['harness: API globals restored after cleanup (VERITAS_API_BASE originally defined)', testHarnessRestoresApiGlobalsWhenBaseOriginallyDefined],
   ['harness: API globals restored after cleanup (VERITAS_API_BASE originally absent)', testHarnessRestoresApiGlobalsWhenBaseOriginallyAbsent],
   ['harness: globals restored when a test throws (finally cleanup)', testHarnessRestoreRunsWhenTestThrows]
