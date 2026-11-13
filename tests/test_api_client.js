@@ -126,7 +126,9 @@ function testProductionPageNeverUsesLocalhost() {
     delete global.VERITAS_API_BASE;
     assert.strictEqual(api.resolveBaseUrl(), '');
     assert.strictEqual(api.resolveBaseUrl('http://localhost:8000'), '');
-    assert.strictEqual(api.resolveBaseUrl('https://veritas-api.example.com'), 'https://veritas-api.example.com');
+    // P0 hardening: an arbitrary https host is NOT silently trusted.
+    // It requires explicit user consent (covered in testUntrustedBaseRequiresExplicitConsent).
+    assert.strictEqual(api.resolveBaseUrl('https://veritas-api.example.com'), '');
   });
 }
 
@@ -245,7 +247,8 @@ function testIsConfigured() {
   withPageLocation({ protocol: 'https:', hostname: 'mohamdmamdoh83-coder.github.io', search: '' }, () => {
     delete global.VERITAS_API_BASE;
     assert.strictEqual(api.isConfigured(), false);
-    assert.strictEqual(api.isConfigured('https://veritas-api.example.com'), true);
+    // P0 hardening: untrusted hosts are not configured without consent.
+    assert.strictEqual(api.isConfigured('https://veritas-api.example.com'), false);
     assert.strictEqual(api.isConfigured('http://localhost:8000'), false);
   });
 }
@@ -258,6 +261,142 @@ function testTooLargeRejectedLocally() {
     if (error.message === 'expected too_large') throw error;
     assert.strictEqual(error.code, 'too_large');
   });
+}
+
+// ---------------------------------------------------------------------------
+// P0: API destination policy — untrusted hosts need explicit user consent
+// ---------------------------------------------------------------------------
+
+function withMetaTags(meta, fn) {
+  const previousDocument = global.document;
+  global.document = {
+    querySelector(selector) {
+      const match = /meta\[name="([^"]+)"\]/.exec(selector);
+      const name = match ? match[1] : '';
+      if (!(name in meta)) return null;
+      return {
+        getAttribute(attribute) {
+          return attribute === 'content' ? meta[name] : null;
+        }
+      };
+    }
+  };
+  try {
+    return fn();
+  } finally {
+    if (previousDocument === undefined) delete global.document;
+    else global.document = previousDocument;
+  }
+}
+
+function testUntrustedBaseRequiresExplicitConsent() {
+  api.resetDestinationConsent();
+  withPageLocation({ protocol: 'https:', hostname: 'mohamdmamdoh83-coder.github.io', search: '?apiBase=https://attacker.example' }, () => {
+    delete global.VERITAS_API_BASE;
+    // Consent denied (or no dialog available) -> the override is ignored.
+    global.window.confirm = () => false;
+    assert.strictEqual(api.resolveBaseUrl(), '');
+    assert.strictEqual(api.isConfigured(), false);
+    // The same override is honored only after explicit user consent.
+    api.resetDestinationConsent();
+    global.window.confirm = (message) => {
+      assert.match(message, /attacker\.example/);
+      return true;
+    };
+    assert.strictEqual(api.resolveBaseUrl(), 'https://attacker.example');
+    const description = api.describeDestination();
+    assert.strictEqual(description.base, 'https://attacker.example');
+    assert.strictEqual(description.source, 'query');
+    assert.strictEqual(description.trusted, false);
+    assert.strictEqual(description.consented, true);
+  });
+  api.resetDestinationConsent();
+}
+
+function testConsentDeniedFallsBackToConfiguredProductionHost() {
+  api.resetDestinationConsent();
+  withPageLocation({ protocol: 'https:', hostname: 'mohamdmamdoh83-coder.github.io', search: '?apiBase=https://attacker.example' }, () => {
+    delete global.VERITAS_API_BASE;
+    global.window.confirm = () => false;
+    withMetaTags({ 'veritas-api-base-production': 'https://veritas-api.example.com' }, () => {
+      // The deployment-configured production host is trusted without prompting.
+      assert.strictEqual(api.isTrustedHost('veritas-api.example.com'), true);
+      assert.strictEqual(api.isTrustedHost('attacker.example'), false);
+      assert.strictEqual(api.resolveBaseUrl(), 'https://veritas-api.example.com');
+    });
+  });
+  api.resetDestinationConsent();
+}
+
+function testLocalStorageOverrideGatedByConsent() {
+  api.resetDestinationConsent();
+  const previousStorage = global.localStorage;
+  global.localStorage = {
+    getItem: (name) => (name === 'veritas.apiBaseUrl' ? 'https://stored-attacker.example' : null)
+  };
+  try {
+    withPageLocation({ protocol: 'https:', hostname: 'mohamdmamdoh83-coder.github.io', search: '' }, () => {
+      delete global.VERITAS_API_BASE;
+      global.window.confirm = () => false;
+      assert.strictEqual(api.resolveBaseUrl(), '');
+      api.resetDestinationConsent();
+      global.window.confirm = () => true;
+      assert.strictEqual(api.resolveBaseUrl(), 'https://stored-attacker.example');
+    });
+  } finally {
+    if (previousStorage === undefined) delete global.localStorage;
+    else global.localStorage = previousStorage;
+    api.resetDestinationConsent();
+  }
+}
+
+function testSafeBaseRejectsCredentialAndQueryShapes() {
+  assert.strictEqual(api.isSafeApiBase('https://user:pass@example.com'), false);
+  assert.strictEqual(api.isSafeApiBase('https://example.com/steal?x=1'), false);
+  assert.strictEqual(api.isSafeApiBase('https://example.com#frag'), false);
+  assert.strictEqual(api.isSafeApiBase('https://example.com'), true);
+  assert.strictEqual(api.isSafeApiBase('https://example.com/api'), true);
+}
+
+function testDescribeDestinationNeverPrompts() {
+  api.resetDestinationConsent();
+  withPageLocation({ protocol: 'https:', hostname: 'mohamdmamdoh83-coder.github.io', search: '?apiBase=https://attacker.example' }, () => {
+    delete global.VERITAS_API_BASE;
+    let prompts = 0;
+    global.window.confirm = () => {
+      prompts += 1;
+      return false;
+    };
+    const description = api.describeDestination();
+    assert.strictEqual(prompts, 0, 'describeDestination must never open a consent dialog');
+    assert.strictEqual(description.base, '');
+    assert.strictEqual(description.source, 'none');
+    // Consent is requested exactly when a request would use the destination.
+    assert.strictEqual(api.resolveBaseUrl(), '');
+    assert.strictEqual(prompts, 1);
+  });
+  api.resetDestinationConsent();
+}
+
+function testLoopbackDevelopmentBaseNeedsNoConsent() {
+  api.resetDestinationConsent();
+  withPageLocation({ protocol: 'https:', hostname: 'mohamdmamdoh83-coder.github.io', search: '?apiBase=http://127.0.0.1:8000' }, () => {
+    delete global.VERITAS_API_BASE;
+    global.window.confirm = () => {
+      throw new Error('loopback destinations must never prompt');
+    };
+    // Mixed content is still rejected on https pages...
+    assert.strictEqual(api.resolveBaseUrl(), '');
+  });
+  withPageLocation({ protocol: 'http:', hostname: 'localhost', search: '?apiBase=http://127.0.0.1:8000' }, () => {
+    delete global.VERITAS_API_BASE;
+    global.window.confirm = () => {
+      throw new Error('loopback destinations must never prompt');
+    };
+    // ...but local development keeps working without any dialog.
+    assert.strictEqual(api.resolveBaseUrl(), 'http://127.0.0.1:8000');
+  });
+  api.resetDestinationConsent();
 }
 
 async function main() {
@@ -278,6 +417,12 @@ async function main() {
   testHighRiskSignalsUseDangerTone();
   testIsConfigured();
   await testTooLargeRejectedLocally();
+  testUntrustedBaseRequiresExplicitConsent();
+  testConsentDeniedFallsBackToConfiguredProductionHost();
+  testLocalStorageOverrideGatedByConsent();
+  testSafeBaseRejectsCredentialAndQueryShapes();
+  testDescribeDestinationNeverPrompts();
+  testLoopbackDevelopmentBaseNeedsNoConsent();
   console.log('api.js client tests passed');
 }
 

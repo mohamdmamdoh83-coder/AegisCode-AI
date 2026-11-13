@@ -256,7 +256,7 @@ observer.observe(document.body, { subtree: true, attributes: true });</textarea>
               </div>
 
               <div class="inspector-actions">
-                <div class="privacy-note"><span class="privacy-icon"><i class="fa-solid fa-fingerprint"></i></span><span><b>Private by design</b><small>Evidence is sent to the configured analysis API and is not used to train models.</small></span></div>
+                <div class="privacy-note"><span class="privacy-icon"><i class="fa-solid fa-fingerprint"></i></span><span><b>Private by design</b><small>Evidence is sent only to the API destination named in the status bar. The bundled analysis API is stateless, stores nothing, and makes no outbound requests (see README).</small></span></div>
                 <button class="button button-primary scan-button" id="scanButton" type="button"><i class="fa-solid fa-radar"></i><span>Run deep scan</span><i class="fa-solid fa-arrow-right button-arrow"></i></button>
               </div>
             </div>

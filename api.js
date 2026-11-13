@@ -81,6 +81,11 @@
   function isSafeApiBase(value) {
     var parsed = parseAbsoluteUrl(value);
     if (!parsed) return false;
+    // A base URL must be a plain origin (optionally with a path prefix).
+    // Embedded credentials, query strings, and fragments are never valid API
+    // destinations and are common phishing shapes.
+    if (parsed.username || parsed.password) return false;
+    if (parsed.search || parsed.hash) return false;
     if (isPublicHttpsPage()) {
       return parsed.protocol === 'https:' && !isLoopbackHost(parsed.hostname);
     }
@@ -105,28 +110,118 @@
     }
   }
 
-  function firstSafeBase(values) {
-    for (var i = 0; i < values.length; i += 1) {
-      var candidate = values[i] == null ? '' : String(values[i]).trim();
-      if (!candidate) continue;
-      var trimmed = trimSlash(candidate);
-      if (isSafeApiBase(trimmed)) return trimmed;
+  // ------------------------------------------------------------------
+  // API destination policy (P0 hardening)
+  //
+  // A candidate base URL is only honored when:
+  //   1. it passes isSafeApiBase (protocol/shape checks), and
+  //   2. its host is TRUSTED — loopback for local development, or the host
+  //      explicitly configured for this deployment via the
+  //      veritas-api-base-production meta tag — or the user explicitly
+  //      consented to that exact destination via a confirmation dialog.
+  //
+  // Untrusted ?apiBase= / localStorage / window overrides can therefore never
+  // silently redirect files or source code to a third party. When no user
+  // interaction is possible (non-browser hosts, disabled dialogs) consent is
+  // denied and the override is ignored (fail closed).
+  // ------------------------------------------------------------------
+
+  var destinationConsent = {};
+
+  function confirmDestination(base) {
+    var confirmer = null;
+    if (typeof window !== 'undefined' && window && typeof window.confirm === 'function') {
+      confirmer = function (message) { return window.confirm(message); };
+    } else if (typeof globalThis !== 'undefined' && typeof globalThis.confirm === 'function') {
+      confirmer = function (message) { return globalThis.confirm(message); };
     }
-    return '';
+    if (!confirmer) return false;
+    var message = 'Send inspection evidence (files, source code, URLs) to ' + base +
+      '? Only approve if you trust this analysis API — everything you scan is sent there.';
+    try {
+      return Boolean(confirmer(message));
+    } catch (error) {
+      return false;
+    }
+  }
+
+  function configuredProductionHost() {
+    var raw = readMetaBase('veritas-api-base-production');
+    var parsed = raw ? parseAbsoluteUrl(raw) : null;
+    return parsed ? parsed.hostname.toLowerCase() : '';
+  }
+
+  function isTrustedHost(hostname) {
+    var host = String(hostname || '').toLowerCase();
+    if (!host) return false;
+    if (isLoopbackHost(host)) return true;
+    var productionHost = configuredProductionHost();
+    return Boolean(productionHost) && host === productionHost;
+  }
+
+  function destinationAllowed(base, mayPrompt) {
+    var parsed = parseAbsoluteUrl(base);
+    if (!parsed) return false;
+    if (!isSafeApiBase(base)) return false;
+    if (isTrustedHost(parsed.hostname)) return true;
+    var key = trimSlash(String(base).trim());
+    if (Object.prototype.hasOwnProperty.call(destinationConsent, key)) return destinationConsent[key];
+    if (!mayPrompt) return false;
+    var granted = confirmDestination(key);
+    destinationConsent[key] = granted;
+    return granted;
+  }
+
+  function resetDestinationConsent() {
+    destinationConsent = {};
+  }
+
+  function evaluateCandidate(candidate, source, mayPrompt) {
+    if (candidate == null) return null;
+    var trimmed = trimSlash(String(candidate).trim());
+    if (!trimmed) return null;
+    if (!destinationAllowed(trimmed, mayPrompt)) return null;
+    return { base: trimmed, source: source };
+  }
+
+  function resolveDestination(explicit, mayPrompt) {
+    var candidates = [
+      [explicit, 'explicit'],
+      [global.VERITAS_API_BASE, 'window'],
+      [readQueryBase(), 'query'],
+      [readMetaBase('veritas-api-base-production'), 'meta-production'],
+      [readMetaBase('veritas-api-base'), 'meta-dev'],
+      [readStoredBase(), 'storage']
+    ];
+    for (var i = 0; i < candidates.length; i += 1) {
+      var resolved = evaluateCandidate(candidates[i][0], candidates[i][1], mayPrompt);
+      if (resolved) return resolved;
+    }
+    if (isPublicHttpsPage()) return { base: '', source: 'none' };
+    return { base: DEFAULT_BASE_URL, source: 'default' };
   }
 
   function resolveBaseUrl(explicit) {
-    var resolved = firstSafeBase([
-      explicit,
-      global.VERITAS_API_BASE,
-      readQueryBase(),
-      readMetaBase('veritas-api-base-production'),
-      readMetaBase('veritas-api-base'),
-      readStoredBase()
-    ]);
-    if (resolved) return resolved;
-    if (isPublicHttpsPage()) return '';
-    return DEFAULT_BASE_URL;
+    return resolveDestination(explicit, true).base;
+  }
+
+  /** Non-prompting description of the selected API destination (transparency). */
+  function describeDestination(explicit) {
+    var resolved = resolveDestination(explicit, false);
+    var parsed = resolved.base ? parseAbsoluteUrl(resolved.base) : null;
+    var host = parsed ? parsed.hostname : '';
+    var consented = false;
+    if (parsed && !isTrustedHost(host)) {
+      var key = trimSlash(resolved.base);
+      consented = destinationConsent[key] === true;
+    }
+    return {
+      base: resolved.base,
+      source: resolved.source,
+      host: host,
+      trusted: Boolean(parsed) && isTrustedHost(host),
+      consented: consented
+    };
   }
 
   function classifyHttpError(status, detail) {
@@ -476,7 +571,10 @@
     ApiError: ApiError,
     isPublicHttpsPage: isPublicHttpsPage,
     isSafeApiBase: isSafeApiBase,
+    isTrustedHost: isTrustedHost,
     resolveBaseUrl: resolveBaseUrl,
+    describeDestination: describeDestination,
+    resetDestinationConsent: resetDestinationConsent,
     isConfigured: function isConfigured(explicit) {
       return Boolean(resolveBaseUrl(explicit));
     },

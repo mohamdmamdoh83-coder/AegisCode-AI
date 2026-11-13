@@ -385,12 +385,22 @@ if (next && !next.startsWith('https://trusted.example')) {
 
   function setBackendStatus(connection, title, detail) {
     state.connection = connection;
+    const destination = api().describeDestination ? api().describeDestination() : null;
+    const destinationLabel = destination && destination.base
+      ? `Analysis API destination: ${destination.base}${destination.trusted ? '' : ' (user-approved)'}`
+      : 'Analysis API destination: not configured';
     const shell = $('#backendStatus');
-    if (shell) shell.setAttribute('data-connection', connection);
+    if (shell) {
+      shell.setAttribute('data-connection', connection);
+      shell.setAttribute('title', destinationLabel);
+    }
     if ($('#backendStatusTitle')) $('#backendStatusTitle').textContent = title;
     if ($('#backendStatusDetail')) $('#backendStatusDetail').textContent = detail;
     const hero = $('#heroApiStatus');
-    if (hero) hero.setAttribute('data-connection', connection);
+    if (hero) {
+      hero.setAttribute('data-connection', connection);
+      hero.setAttribute('title', destinationLabel);
+    }
     if ($('#heroApiStatusTitle')) $('#heroApiStatusTitle').textContent = title;
     if ($('#heroApiStatusDetail')) $('#heroApiStatusDetail').textContent = detail;
   }
@@ -423,7 +433,9 @@ if (next && !next.startsWith('https://trusted.example')) {
     try {
       const payload = await api().health();
       const service = payload.service ? String(payload.service) : 'API CONNECTED';
-      setBackendStatus('connected', 'API CONNECTED', service.replace(/-/g, ' ').toUpperCase());
+      const destination = api().describeDestination();
+      const hostSuffix = destination && destination.host ? ` · API ${destination.host}` : '';
+      setBackendStatus('connected', 'API CONNECTED', service.replace(/-/g, ' ').toUpperCase() + hostSuffix);
     } catch (error) {
       applyConnectionError(error, false);
     }
@@ -874,6 +886,7 @@ if (next && !next.startsWith('https://trusted.example')) {
       '--------------------------------------',
       `Generated: ${new Date().toISOString()}`,
       `Inspection mode: ${state.mode.toUpperCase()}`,
+      `API destination: ${api().describeDestination().base || 'not configured'}`,
       `Result origin: ${origin}`,
       `Trust score: ${result.source === 'backend' && result.score != null ? `${Number(result.score).toFixed(1)} / 100` : 'n/a (no backend verdict)'}`,
       `Verdict: ${result.statusText}`,
