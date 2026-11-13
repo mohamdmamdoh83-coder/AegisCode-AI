@@ -250,6 +250,10 @@ a { color: inherit; text-decoration: none; }
 .result-status.idle .status-pulse { background: var(--cyan); box-shadow: 0 0 0 3px rgba(64,230,255,.08), 0 0 8px rgba(64,230,255,.55); }
 .result-status.error .status-pulse { background: #8b7380; box-shadow: none; }
 
+/* Demo-data labels (Phase 1 honesty pass) */
+.proof-demo-tag { background: rgba(139,123,255,.12); border: 1px solid rgba(139,123,255,.35); border-radius: 3px; color: var(--violet); letter-spacing: .12em; padding: 2px 5px; }
+.device-note { color: #617280; font-family: var(--mono); font-size: 7px; line-height: 1.5; margin: 2px 0 4px; }
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; transition-duration: .01ms !important; }
 }

@@ -88,3 +88,15 @@ curl -X POST http://localhost:8000/api/v1/filter-threat \\
 - Device Guardian perimeter widget and activity chart are demonstration layout only. Adaptive protection toggle, toast feedback, and local report export remain local UI.
 - Tailwind CSS and Font Awesome loaded via CDN; app behavior is implemented in vanilla JavaScript.
 - Real-time cyberpunk threat alerts raise an active banner, animated notification popups, visual sound-wave indicators, optional alert tones, and dismissal/review controls for malicious or suspicious **backend** findings.
+
+## Demo data notice
+
+Several dashboard visuals are static demonstration artwork. They are labeled `DEMO` / `SAMPLE` / `not live` in the UI and are **not** real production data:
+
+- The hero social-proof row (avatar stack, `+8k` badge, the `8,241` demo scan count, and the `4.9/5` sample rating) is fictional and does not represent real users, scans, customers, or ratings.
+- The telemetry strip values (network pulse, signals indexed, mean verdict time) and their trend percentages are sample numbers, not live telemetry.
+- The Device Guardian card lists fictional sample devices, browsers, and locations; its perimeter states are demo states, not real device monitoring.
+- The threat landscape activity chart, its curve, tooltip value, and timestamps are a static sample, not real threat activity.
+- The protocol / adaptive-protection card and its toggle are a local UI demo and change no protection settings.
+
+Real verdicts come only from the configured analysis API and are labeled with their backend origin. Idle and error states never show numeric mock scores.

@@ -783,7 +783,7 @@ if (next && !next.startsWith('https://trusted.example')) {
     if (!shell) return;
     state.dismissedAlertFingerprint = state.activeAlertFingerprint;
     shell.hidden = true;
-    showToast('Threat alert dismissed. Protection remains active.', 'fa-shield-halved');
+    showToast('Threat alert dismissed. Run a deep scan to refresh verdicts.', 'fa-shield-halved');
   }
 
   function playAlertTone(severity = 'critical') {

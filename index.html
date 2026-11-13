@@ -126,16 +126,17 @@
             </button>
             <button class="button button-ghost" type="button" data-scroll-to="results">
               <i class="fa-regular fa-circle-play"></i>
-              View live report
+              View report
             </button>
           </div>
-          <div class="hero-proof">
+          <div class="hero-proof" title="Demo social proof — fictional users, count, and rating. Not live data.">
             <div class="avatar-stack" aria-hidden="true">
               <span class="avatar avatar-a">A</span><span class="avatar avatar-b">M</span><span class="avatar avatar-c">K</span><span class="avatar avatar-more">+8k</span>
             </div>
-            <span><strong>8,241</strong> demo statistic <small>(not live)</small></span>
+            <span class="proof-demo-tag">DEMO · SAMPLE USERS</span>
+            <span><strong>8,241</strong> demo scans <small>(sample · not live)</small></span>
             <span class="proof-divider"></span>
-            <span class="proof-rating"><i class="fa-solid fa-star"></i> 4.9/5</span>
+            <span class="proof-rating"><i class="fa-solid fa-star"></i> 4.9/5 <small>(sample rating)</small></span>
           </div>
         </div>
 
@@ -160,7 +161,7 @@
         <div class="telemetry-item">
           <span class="telemetry-icon cyan-icon"><i class="fa-solid fa-wave-square"></i></span>
           <span><small>DEMO · NETWORK PULSE</small><strong>12.8 <b>Gb/s</b></strong></span>
-          <span class="telemetry-trend up"><i class="fa-solid fa-arrow-trend-up"></i> 8.2%</span>
+          <span class="telemetry-trend up"><i class="fa-solid fa-arrow-trend-up"></i> 8.2% sample</span>
         </div>
         <div class="telemetry-item">
           <span class="telemetry-icon violet-icon"><i class="fa-solid fa-fingerprint"></i></span>
@@ -170,7 +171,7 @@
         <div class="telemetry-item">
           <span class="telemetry-icon lime-icon"><i class="fa-solid fa-bolt"></i></span>
           <span><small>DEMO · MEAN VERDICT TIME</small><strong>1.8 <b>sec</b></strong></span>
-          <span class="telemetry-trend up"><i class="fa-solid fa-arrow-trend-down"></i> 12.4%</span>
+          <span class="telemetry-trend up"><i class="fa-solid fa-arrow-trend-down"></i> 12.4% sample</span>
         </div>
         <div class="telemetry-item telemetry-location">
           <span class="live-map-dot"></span>
@@ -193,7 +194,7 @@
             <div class="glass-panel inspector-panel">
               <div class="panel-topline">
                 <div>
-                  <div class="panel-kicker"><span class="live-dot"></span> LIVE INSPECTION</div>
+                  <div class="panel-kicker"><span class="live-dot"></span> INSPECTION WORKSPACE</div>
                   <h3>Choose an inspection mode</h3>
                 </div>
                 <div class="panel-meta"><span class="secure-lock"><i class="fa-solid fa-lock"></i></span> No client-side encryption</div>
@@ -297,22 +298,23 @@ observer.observe(document.body, { subtree: true, attributes: true });</textarea>
               <div class="card-heading"><div><div class="panel-kicker"><span class="live-dot"></span> DEVICE GUARDIAN · DEMO</div><h3>Protected perimeter</h3></div><button type="button" class="icon-button" id="refreshDevices" aria-label="Refresh demo devices"><i class="fa-solid fa-rotate"></i></button></div>
               <div class="guardian-score"><div class="guardian-ring"><i class="fa-solid fa-shield-halved"></i></div><div><strong>4 <span>/ 4</span></strong><small>demo devices</small></div><span class="guardian-online"><i></i> Demo</span></div>
               <div class="device-list" id="deviceList">
-                <div class="device-row"><span class="device-logo mac"><i class="fa-brands fa-apple"></i></span><span class="device-info"><b>MacBook Pro</b><small>Chrome · Cairo, EG</small></span><span class="device-state"><i></i>Protected</span></div>
-                <div class="device-row"><span class="device-logo phone"><i class="fa-solid fa-mobile-screen"></i></span><span class="device-info"><b>iPhone 15 Pro</b><small>Safari · Cairo, EG</small></span><span class="device-state"><i></i>Protected</span></div>
-                <div class="device-row"><span class="device-logo windows"><i class="fa-brands fa-windows"></i></span><span class="device-info"><b>Studio workstation</b><small>Edge · London, UK</small></span><span class="device-state"><i></i>Protected</span></div>
-                <div class="device-row"><span class="device-logo linux"><i class="fa-brands fa-linux"></i></span><span class="device-info"><b>Analysis node</b><small>Firefox · Frankfurt, DE</small></span><span class="device-state"><i></i>Protected</span></div>
+                <div class="device-row"><span class="device-logo mac"><i class="fa-brands fa-apple"></i></span><span class="device-info"><b>MacBook Pro</b><small>SAMPLE · Chrome · Cairo, EG</small></span><span class="device-state"><i></i>Demo · Protected</span></div>
+                <div class="device-row"><span class="device-logo phone"><i class="fa-solid fa-mobile-screen"></i></span><span class="device-info"><b>iPhone 15 Pro</b><small>SAMPLE · Safari · Cairo, EG</small></span><span class="device-state"><i></i>Demo · Protected</span></div>
+                <div class="device-row"><span class="device-logo windows"><i class="fa-brands fa-windows"></i></span><span class="device-info"><b>Studio workstation</b><small>SAMPLE · Edge · London, UK</small></span><span class="device-state"><i></i>Demo · Protected</span></div>
+                <div class="device-row"><span class="device-logo linux"><i class="fa-brands fa-linux"></i></span><span class="device-info"><b>Analysis node</b><small>SAMPLE · Firefox · Frankfurt, DE</small></span><span class="device-state"><i></i>Demo · Protected</span></div>
               </div>
-              <button class="manage-link" id="manageDevices" type="button">Manage protected devices <i class="fa-solid fa-arrow-right"></i></button>
+              <p class="device-note">Fictional sample devices and locations — not real endpoints or live monitoring.</p>
+              <button class="manage-link" id="manageDevices" type="button">Manage demo devices <i class="fa-solid fa-arrow-right"></i></button>
             </div>
 
             <div class="glass-panel threat-card">
               <div class="card-heading"><div><div class="panel-kicker violet-kicker"><span class="live-dot"></span> THREAT LANDSCAPE · DEMO</div><h3>Signal activity</h3></div><span class="time-select">DEMO <i class="fa-solid fa-chevron-down"></i></span></div>
-              <div class="chart-wrap"><div class="chart-y-labels"><span>100</span><span>50</span><span>0</span></div><div class="activity-chart"><div class="chart-grid"></div><svg viewBox="0 0 330 118" preserveAspectRatio="none" aria-label="Signal activity chart" role="img"><defs><linearGradient id="chartFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#7d73ff" stop-opacity=".3"/><stop offset="1" stop-color="#7d73ff" stop-opacity="0"/></linearGradient><linearGradient id="chartStroke" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#42e5ff"/><stop offset="1" stop-color="#9a7bff"/></linearGradient></defs><path class="chart-area" d="M0,91 C18,86 22,63 43,69 S70,82 83,59 S107,66 123,48 S144,57 159,34 S185,55 200,45 S223,55 239,27 S259,46 276,32 S302,38 330,14 L330,118 L0,118 Z"/><path class="chart-line" d="M0,91 C18,86 22,63 43,69 S70,82 83,59 S107,66 123,48 S144,57 159,34 S185,55 200,45 S223,55 239,27 S259,46 276,32 S302,38 330,14"/><circle cx="239" cy="27" r="4"></circle></svg><div class="chart-tooltip"><b>72</b><small>08:00 UTC</small></div></div></div>
-              <div class="chart-legend"><span><i class="legend-safe"></i> Verified signals</span><span><i class="legend-review"></i> Flagged signals</span></div>
+              <div class="chart-wrap"><div class="chart-y-labels"><span>100</span><span>50</span><span>0</span></div><div class="activity-chart"><div class="chart-grid"></div><svg viewBox="0 0 330 118" preserveAspectRatio="none" aria-label="Static sample signal activity chart — demo data, not live" role="img"><defs><linearGradient id="chartFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#7d73ff" stop-opacity=".3"/><stop offset="1" stop-color="#7d73ff" stop-opacity="0"/></linearGradient><linearGradient id="chartStroke" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#42e5ff"/><stop offset="1" stop-color="#9a7bff"/></linearGradient></defs><path class="chart-area" d="M0,91 C18,86 22,63 43,69 S70,82 83,59 S107,66 123,48 S144,57 159,34 S185,55 200,45 S223,55 239,27 S259,46 276,32 S302,38 330,14 L330,118 L0,118 Z"/><path class="chart-line" d="M0,91 C18,86 22,63 43,69 S70,82 83,59 S107,66 123,48 S144,57 159,34 S185,55 200,45 S223,55 239,27 S259,46 276,32 S302,38 330,14"/><circle cx="239" cy="27" r="4"></circle></svg><div class="chart-tooltip"><b>72</b><small>SAMPLE · 08:00 UTC</small></div></div></div>
+              <div class="chart-legend"><span><i class="legend-safe"></i> Sample verified signals</span><span><i class="legend-review"></i> Sample flagged signals</span></div>
             </div>
 
             <div class="glass-panel protocol-card" id="settings">
-              <div class="protocol-icon"><i class="fa-solid fa-sliders"></i></div><div><div class="panel-kicker">PROTOCOL DEFAULTS</div><strong>Adaptive protection</strong><small>Precision mode · Auto-update on</small></div><button class="toggle active" id="protectionToggle" type="button" aria-label="Toggle adaptive protection" aria-pressed="true"><span></span></button>
+              <div class="protocol-icon"><i class="fa-solid fa-sliders"></i></div><div><div class="panel-kicker">PROTOCOL DEFAULTS · DEMO</div><strong>Adaptive protection</strong><small>UI demo only · no real protection settings</small></div><button class="toggle active" id="protectionToggle" type="button" aria-label="Toggle adaptive protection" aria-pressed="true"><span></span></button>
             </div>
           </aside>
         </div>
