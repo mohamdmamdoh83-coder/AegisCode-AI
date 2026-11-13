@@ -385,12 +385,22 @@ if (next && !next.startsWith('https://trusted.example')) {
 
   function setBackendStatus(connection, title, detail) {
     state.connection = connection;
+    const destination = api().describeDestination ? api().describeDestination() : null;
+    const destinationLabel = destination && destination.base
+      ? `Analysis API destination: ${destination.base}${destination.trusted ? '' : ' (user-approved)'}`
+      : 'Analysis API destination: not configured';
     const shell = $('#backendStatus');
-    if (shell) shell.setAttribute('data-connection', connection);
+    if (shell) {
+      shell.setAttribute('data-connection', connection);
+      shell.setAttribute('title', destinationLabel);
+    }
     if ($('#backendStatusTitle')) $('#backendStatusTitle').textContent = title;
     if ($('#backendStatusDetail')) $('#backendStatusDetail').textContent = detail;
     const hero = $('#heroApiStatus');
-    if (hero) hero.setAttribute('data-connection', connection);
+    if (hero) {
+      hero.setAttribute('data-connection', connection);
+      hero.setAttribute('title', destinationLabel);
+    }
     if ($('#heroApiStatusTitle')) $('#heroApiStatusTitle').textContent = title;
     if ($('#heroApiStatusDetail')) $('#heroApiStatusDetail').textContent = detail;
   }
@@ -423,7 +433,9 @@ if (next && !next.startsWith('https://trusted.example')) {
     try {
       const payload = await api().health();
       const service = payload.service ? String(payload.service) : 'API CONNECTED';
-      setBackendStatus('connected', 'API CONNECTED', service.replace(/-/g, ' ').toUpperCase());
+      const destination = api().describeDestination();
+      const hostSuffix = destination && destination.host ? ` · API ${destination.host}` : '';
+      setBackendStatus('connected', 'API CONNECTED', service.replace(/-/g, ' ').toUpperCase() + hostSuffix);
     } catch (error) {
       applyConnectionError(error, false);
     }
@@ -544,6 +556,11 @@ if (next && !next.startsWith('https://trusted.example')) {
           appendEvidenceEntry(new Date().toLocaleTimeString([], { hour12: false }), 'info', 'fa-terminal', message, result.statusText);
         });
       }
+      // A successful response proves connectivity; refresh the status chip so
+      // it names the real destination (e.g. after consent was just granted).
+      const scanDestination = api().describeDestination();
+      const scanHostSuffix = scanDestination && scanDestination.host ? ` · API ${scanDestination.host}` : '';
+      setBackendStatus('connected', 'API CONNECTED', 'SCAN COMPLETE' + scanHostSuffix);
       showToast('Backend verdict received.', result.status === 'danger' ? 'fa-triangle-exclamation' : 'fa-shield-halved');
     } catch (error) {
       if (token !== state.inspectToken) return;
@@ -575,7 +592,7 @@ if (next && !next.startsWith('https://trusted.example')) {
     }
     if ($('#scoreValue')) $('#scoreValue').textContent = isVerdict ? Number(result.score).toFixed(1) : '—';
     if ($('#scoreUnit')) $('#scoreUnit').hidden = !isVerdict;
-    if ($('#scoreKind')) $('#scoreKind').textContent = isVerdict ? 'TRUST SCORE' : 'NO VERDICT';
+    if ($('#scoreKind')) $('#scoreKind').textContent = isVerdict ? 'TRUST SCORE · ' + String(result.assessment || 'NO THREAT DETECTED').toUpperCase() : 'NO VERDICT';
     if ($('#scoreCaption')) $('#scoreCaption').textContent = result.caption;
     const captionIcon = $('.score-caption i');
     if (captionIcon) {
@@ -671,11 +688,18 @@ if (next && !next.startsWith('https://trusted.example')) {
 
   function threatAlertPayload(result, sourceType) {
     if (!result || !result.evidenceFingerprint || result.source !== 'backend') return null;
+    // Analysis failures are never presented as threats (fail closed in the
+    // result row, but do not raise a "threat detected" banner).
+    if (result.assessment === 'Analysis Error') return null;
     const metrics = result.metrics || {};
     const injection = Number(metrics.injectionIndex ?? metrics.threatBreakdown?.injectionRisk ?? 0);
     const obfuscation = Number(metrics.obfuscationIndex ?? metrics.threatBreakdown?.obfuscationRisk ?? 0);
     const contentRisk = Number(metrics.risk ?? metrics.threatRisk ?? (100 - Number(result.score || 100)));
-    const critical = result.status === 'danger' || injection >= 48 || contentRisk >= 62;
+    // Only confirmed detections (backend MALICIOUS/BLOCK verdicts) may raise a
+    // critical "malicious" banner; strong-but-unconfirmed signals stay at the
+    // review level so heuristic/suspicious findings are never presented as
+    // confirmed malware.
+    const critical = result.status === 'danger' && result.isVerdict === true && result.assessment === 'Confirmed Detection';
     const review = result.status === 'review' || injection >= 28 || obfuscation >= 65 || contentRisk >= 30;
     if (!critical && !review) return null;
 
@@ -783,7 +807,7 @@ if (next && !next.startsWith('https://trusted.example')) {
     if (!shell) return;
     state.dismissedAlertFingerprint = state.activeAlertFingerprint;
     shell.hidden = true;
-    showToast('Threat alert dismissed. Protection remains active.', 'fa-shield-halved');
+    showToast('Threat alert dismissed. Run a deep scan to refresh verdicts.', 'fa-shield-halved');
   }
 
   function playAlertTone(severity = 'critical') {
@@ -874,7 +898,9 @@ if (next && !next.startsWith('https://trusted.example')) {
       '--------------------------------------',
       `Generated: ${new Date().toISOString()}`,
       `Inspection mode: ${state.mode.toUpperCase()}`,
+      `API destination: ${api().describeDestination().base || 'not configured'}`,
       `Result origin: ${origin}`,
+      `Assessment: ${result.assessment || 'n/a'}`,
       `Trust score: ${result.source === 'backend' && result.score != null ? `${Number(result.score).toFixed(1)} / 100` : 'n/a (no backend verdict)'}`,
       `Verdict: ${result.statusText}`,
       `Confidence: ${result.confidence} (${result.confidencePercent}%)`,

@@ -45,6 +45,14 @@ ALLOW = "ALLOW"
 QUARANTINE = "QUARANTINE"
 BLOCK = "BLOCK"
 
+# Explicit assessment taxonomy (mirrors backend_core; kept local so this module
+# stays standalone-runnable).  Labels describe evidential weight, not intent.
+ASSESSMENT_CONFIRMED = "Confirmed Detection"
+ASSESSMENT_SUSPICIOUS = "Suspicious Behavior"
+ASSESSMENT_HEURISTIC = "Heuristic Warning"
+ASSESSMENT_NONE = "No Threat Detected"
+ASSESSMENT_ERROR = "Analysis Error"
+
 
 class PayloadDecodeError(ValueError):
     """Raised when a submitted base64 file payload cannot be decoded safely."""
@@ -165,6 +173,7 @@ class ThreatFilterResult:
     components: dict[str, Any]
     forensic_logs: list[ForensicLog]
     policy_reasons: list[str]
+    assessment: str
 
     def to_dict(self) -> dict[str, Any]:
         result = asdict(self)
@@ -1183,6 +1192,19 @@ class ThreatFilterEngine:
             },
             sort_keys=True,
         )
+        component_error = any(
+            isinstance(report, Mapping) and report.get("error") for report in components.values()
+        )
+        if component_error:
+            assessment = ASSESSMENT_ERROR
+        elif action == BLOCK:
+            assessment = ASSESSMENT_CONFIRMED
+        elif action == QUARANTINE:
+            assessment = ASSESSMENT_SUSPICIOUS
+        elif any(value >= 20.0 for value in component_scores.values()):
+            assessment = ASSESSMENT_HEURISTIC
+        else:
+            assessment = ASSESSMENT_NONE
         return ThreatFilterResult(
             analysis_id=_hash_text(canonical_id)[:16],
             analyzed_at=datetime.now(timezone.utc).isoformat(),
@@ -1194,6 +1216,7 @@ class ThreatFilterEngine:
             components=components,
             forensic_logs=logs,
             policy_reasons=policy_reasons,
+            assessment=assessment,
         )
 
     @staticmethod
@@ -1266,6 +1289,7 @@ class ThreatFilterEngine:
             "confidence_index": report.confidence_index,
             "anomaly_flags": report.anomaly_flags,
             "syntax_errors": report.syntax_errors,
+            "assessment": getattr(report, "assessment", None),
             "threat_breakdown": report.threat_breakdown,
             "forensic_logs": [{"level": "info", "message": message, "evidence": {}} for message in report.analysis_logs],
         }

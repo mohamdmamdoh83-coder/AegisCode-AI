@@ -60,8 +60,10 @@
   }
 
   function isLoopbackHost(hostname) {
-    var host = String(hostname || '').replace(/^\[|\]$/g, '').toLowerCase();
-    return host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '0.0.0.0';
+    var host = String(hostname || '').replace(/^\[|\]$/g, '').toLowerCase().replace(/\.$/, '');
+    if (host.indexOf('::ffff:') === 0) host = host.slice(7);
+    return host === 'localhost' || host === '::1' || host === '0.0.0.0' ||
+      /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host);
   }
 
   function isPublicHttpsPage() {
@@ -78,13 +80,34 @@
     }
   }
 
+  // Control characters, line separators, bidi/zero-width characters and raw
+  // backslashes can visually spoof a consent dialog (fake lines, reversed
+  // text, host confusion). They are never valid in an API base URL.
+  var UNSAFE_BASE_CHARS = /[\u0000-\u001F\u007F\u200B-\u200F\u2028\u2029\u202A-\u202E\u2066-\u2069\\]/;
+
   function isSafeApiBase(value) {
-    var parsed = parseAbsoluteUrl(value);
+    var raw = String(value == null ? '' : value);
+    if (UNSAFE_BASE_CHARS.test(raw)) return false;
+    var parsed = parseAbsoluteUrl(raw);
     if (!parsed) return false;
+    // A base URL must be a plain origin (optionally with a path prefix).
+    // Embedded credentials, query strings, and fragments are never valid API
+    // destinations and are common phishing shapes.
+    if (parsed.username || parsed.password) return false;
+    if (parsed.search || parsed.hash) return false;
     if (isPublicHttpsPage()) {
       return parsed.protocol === 'https:' && !isLoopbackHost(parsed.hostname);
     }
     return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  }
+
+  // Canonical display/key form: scheme://host[:port][/path]. Parsed through
+  // the URL constructor first, so backslash/percent/case tricks collapse to
+  // the destination that would actually be contacted.
+  function normalizeBase(value) {
+    var parsed = parseAbsoluteUrl(value);
+    if (!parsed) return '';
+    return trimSlash(parsed.origin + parsed.pathname);
   }
 
   function readQueryBase() {
@@ -105,28 +128,121 @@
     }
   }
 
-  function firstSafeBase(values) {
-    for (var i = 0; i < values.length; i += 1) {
-      var candidate = values[i] == null ? '' : String(values[i]).trim();
-      if (!candidate) continue;
-      var trimmed = trimSlash(candidate);
-      if (isSafeApiBase(trimmed)) return trimmed;
+  // ------------------------------------------------------------------
+  // API destination policy (P0 hardening)
+  //
+  // A candidate base URL is only honored when:
+  //   1. it passes isSafeApiBase (protocol/shape checks), and
+  //   2. its host is TRUSTED — loopback for local development, or the host
+  //      explicitly configured for this deployment via the
+  //      veritas-api-base-production meta tag — or the user explicitly
+  //      consented to that exact destination via a confirmation dialog.
+  //
+  // Untrusted ?apiBase= / localStorage / window overrides can therefore never
+  // silently redirect files or source code to a third party. When no user
+  // interaction is possible (non-browser hosts, disabled dialogs) consent is
+  // denied and the override is ignored (fail closed).
+  // ------------------------------------------------------------------
+
+  var destinationConsent = {};
+
+  function confirmDestination(base) {
+    var confirmer = null;
+    if (typeof window !== 'undefined' && window && typeof window.confirm === 'function') {
+      confirmer = function (message) { return window.confirm(message); };
+    } else if (typeof globalThis !== 'undefined' && typeof globalThis.confirm === 'function') {
+      confirmer = function (message) { return globalThis.confirm(message); };
     }
-    return '';
+    if (!confirmer) return false;
+    var message = 'Send inspection evidence (files, source code, URLs) to ' + base +
+      '? Only approve if you trust this analysis API — everything you scan is sent there.';
+    try {
+      return Boolean(confirmer(message));
+    } catch (error) {
+      return false;
+    }
+  }
+
+  function configuredProductionHost() {
+    var raw = readMetaBase('veritas-api-base-production');
+    var parsed = raw ? parseAbsoluteUrl(raw) : null;
+    return parsed ? parsed.hostname.toLowerCase() : '';
+  }
+
+  function isTrustedHost(hostname) {
+    var host = String(hostname || '').replace(/^\[|\]$/g, '').toLowerCase().replace(/\.$/, '');
+    if (!host) return false;
+    if (isLoopbackHost(host)) return true;
+    var productionHost = configuredProductionHost().replace(/\.$/, '');
+    return Boolean(productionHost) && host === productionHost;
+  }
+
+  function destinationAllowed(base, mayPrompt) {
+    var parsed = parseAbsoluteUrl(base);
+    if (!parsed) return false;
+    if (!isSafeApiBase(base)) return false;
+    if (isTrustedHost(parsed.hostname)) return true;
+    var key = trimSlash(String(base).trim());
+    if (Object.prototype.hasOwnProperty.call(destinationConsent, key)) return destinationConsent[key];
+    if (!mayPrompt) return false;
+    var granted = confirmDestination(key);
+    destinationConsent[key] = granted;
+    return granted;
+  }
+
+  function resetDestinationConsent() {
+    destinationConsent = {};
+  }
+
+  function evaluateCandidate(candidate, source, mayPrompt) {
+    if (candidate == null) return null;
+    var raw = String(candidate).trim();
+    if (!raw) return null;
+    if (!isSafeApiBase(raw)) return null;
+    var normalized = normalizeBase(raw);
+    if (!normalized) return null;
+    if (!destinationAllowed(normalized, mayPrompt)) return null;
+    return { base: normalized, source: source };
+  }
+
+  function resolveDestination(explicit, mayPrompt) {
+    var candidates = [
+      [explicit, 'explicit'],
+      [global.VERITAS_API_BASE, 'window'],
+      [readQueryBase(), 'query'],
+      [readMetaBase('veritas-api-base-production'), 'meta-production'],
+      [readMetaBase('veritas-api-base'), 'meta-dev'],
+      [readStoredBase(), 'storage']
+    ];
+    for (var i = 0; i < candidates.length; i += 1) {
+      var resolved = evaluateCandidate(candidates[i][0], candidates[i][1], mayPrompt);
+      if (resolved) return resolved;
+    }
+    if (isPublicHttpsPage()) return { base: '', source: 'none' };
+    return { base: DEFAULT_BASE_URL, source: 'default' };
   }
 
   function resolveBaseUrl(explicit) {
-    var resolved = firstSafeBase([
-      explicit,
-      global.VERITAS_API_BASE,
-      readQueryBase(),
-      readMetaBase('veritas-api-base-production'),
-      readMetaBase('veritas-api-base'),
-      readStoredBase()
-    ]);
-    if (resolved) return resolved;
-    if (isPublicHttpsPage()) return '';
-    return DEFAULT_BASE_URL;
+    return resolveDestination(explicit, true).base;
+  }
+
+  /** Non-prompting description of the selected API destination (transparency). */
+  function describeDestination(explicit) {
+    var resolved = resolveDestination(explicit, false);
+    var parsed = resolved.base ? parseAbsoluteUrl(resolved.base) : null;
+    var host = parsed ? parsed.hostname : '';
+    var consented = false;
+    if (parsed && !isTrustedHost(host)) {
+      var key = trimSlash(resolved.base);
+      consented = destinationConsent[key] === true;
+    }
+    return {
+      base: resolved.base,
+      source: resolved.source,
+      host: host,
+      trusted: Boolean(parsed) && isTrustedHost(host),
+      consented: consented
+    };
   }
 
   function classifyHttpError(status, detail) {
@@ -162,7 +278,11 @@
   }
 
   async function request(path, options) {
-    var baseUrl = resolveBaseUrl(options && options.baseUrl);
+    // Evidence-carrying requests consent to the destination; passive probes
+    // (health) pass allowConsentPrompt: false and fall back silently instead
+    // of opening the "send inspection evidence" dialog.
+    var allowConsentPrompt = !(options && options.allowConsentPrompt === false);
+    var baseUrl = resolveDestination(options && options.baseUrl, allowConsentPrompt).base;
     if (!baseUrl) {
       throw ApiError(
         'unconfigured',
@@ -176,7 +296,10 @@
     var fetchOptions = {
       method: (options && options.method) || 'GET',
       headers: Object.assign({}, options && options.headers),
-      signal: controller ? controller.signal : undefined
+      signal: controller ? controller.signal : undefined,
+      // Never follow redirects: a 307/308 would re-send evidence to another
+      // host without passing the destination policy or the consent dialog.
+      redirect: 'error'
     };
     if (options && options.body !== undefined) fetchOptions.body = options.body;
     if (options && options.timeoutMs && controller) {
@@ -249,6 +372,40 @@
     return [label, value, toneForRisk(value), icon];
   }
 
+  var ASSESSMENTS = ['Confirmed Detection', 'Suspicious Behavior', 'Heuristic Warning', 'No Threat Detected', 'Analysis Error'];
+
+  function normalizeAssessment(value) {
+    return typeof value === 'string' && ASSESSMENTS.indexOf(value) >= 0 ? value : null;
+  }
+
+  // Fallback taxonomy for older backends that omit the assessment field.
+  function assessmentFromInspection(body, statusRaw) {
+    if (statusRaw === 'MALICIOUS') return 'Confirmed Detection';
+    if (statusRaw === 'REVIEW_REQUIRED') return 'Suspicious Behavior';
+    var flags = (Array.isArray(body.anomaly_flags) && body.anomaly_flags.length > 0) ||
+      (Array.isArray(body.syntax_errors) && body.syntax_errors.length > 0);
+    return flags ? 'Heuristic Warning' : 'No Threat Detected';
+  }
+
+  function assessmentFromFilter(body, action) {
+    var breakdown = body.threat_breakdown && typeof body.threat_breakdown === 'object' ? body.threat_breakdown : {};
+    var components = body.components && typeof body.components === 'object' ? body.components : {};
+    var componentError = Boolean(breakdown.error) || Object.keys(components).some(function (key) {
+      var report = components[key];
+      return report && typeof report === 'object' && !Array.isArray(report) && report.error;
+    });
+    if (componentError) return 'Analysis Error';
+    if (action === 'BLOCK') return 'Confirmed Detection';
+    if (action === 'QUARANTINE') return 'Suspicious Behavior';
+    var highest = 0;
+    Object.keys(breakdown).forEach(function (key) {
+      if (key === 'error') return;
+      var value = Number(breakdown[key]) || 0;
+      if (value > highest) highest = value;
+    });
+    return highest >= 20 ? 'Heuristic Warning' : 'No Threat Detected';
+  }
+
   function mapInspectCode(payload) {
     var body = requireObject(payload, 'inspect-code');
     var statusRaw = String(body.verification_status || '');
@@ -294,6 +451,7 @@
       source: 'backend',
       isVerdict: true,
       endpoint: '/api/v1/inspect-code',
+      assessment: normalizeAssessment(body.assessment) || assessmentFromInspection(body, statusRaw),
       raw: body
     };
   }
@@ -342,6 +500,7 @@
       source: 'backend',
       isVerdict: true,
       endpoint: '/api/v1/filter-threat',
+      assessment: normalizeAssessment(body.assessment) || assessmentFromFilter(body, action),
       raw: body
     };
   }
@@ -378,7 +537,8 @@
       evidenceFingerprint: 'error:' + code,
       source: 'error',
       isVerdict: false,
-      backendError: true
+      backendError: true,
+      assessment: 'Analysis Error'
     };
   }
 
@@ -401,12 +561,13 @@
       analysisLogs: [],
       evidenceFingerprint: 'idle',
       source: 'idle',
-      isVerdict: false
+      isVerdict: false,
+      assessment: null
     };
   }
 
   async function health(baseUrl) {
-    var payload = await request('/health', { method: 'GET', baseUrl: baseUrl, timeoutMs: 4000 });
+    var payload = await request('/health', { method: 'GET', baseUrl: baseUrl, timeoutMs: 4000, allowConsentPrompt: false });
     if (!payload || payload.status !== 'ok') {
       throw ApiError('invalid_response', 'Health endpoint did not return status ok.', 200);
     }
@@ -476,9 +637,14 @@
     ApiError: ApiError,
     isPublicHttpsPage: isPublicHttpsPage,
     isSafeApiBase: isSafeApiBase,
+    isTrustedHost: isTrustedHost,
     resolveBaseUrl: resolveBaseUrl,
+    describeDestination: describeDestination,
+    resetDestinationConsent: resetDestinationConsent,
     isConfigured: function isConfigured(explicit) {
-      return Boolean(resolveBaseUrl(explicit));
+      // Checking configuration must never open a consent dialog; consent is
+      // requested when a request is about to carry evidence (resolveBaseUrl).
+      return Boolean(resolveDestination(explicit, false).base);
     },
     toneForRisk: toneForRisk,
     classifyHttpError: classifyHttpError,
